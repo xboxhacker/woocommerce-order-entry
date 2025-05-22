@@ -1,0 +1,41 @@
+.form-table th {
+    width: 150px;
+}
+.form-table input[type="text"], .form-table input[type="email"], .form-table input[type="tel"], .form-table select, .form-table textarea {
+    width: 300px;
+}
+#product-lines-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed; /* Ensures column widths are respected */
+}
+#product-lines-table th, #product-lines-table td {
+    border: 1px solid #ddd;
+    padding: 8px;
+    box-sizing: border-box; /* Includes padding and border in width calculations */
+}
+#product-lines-table th {
+    background-color: #f2f2f2;
+}
+/* Set specific widths for each column */
+#product-lines-table th:nth-child(1),
+#product-lines-table td:nth-child(1) {
+    width: 6.25%; /* QTY: 1/16 of the table width */
+}
+#product-lines-table th:nth-child(2),
+#product-lines-table td:nth-child(2) {
+    width: 25%; /* SKU: 1/4 of the table width */
+}
+#product-lines-table th:nth-child(3),
+#product-lines-table td:nth-child(3) {
+    width: 50%; /* DESCRIPTION: 1/2 of the table width */
+}
+#product-lines-table th:nth-child(4),
+#product-lines-table td:nth-child(4) {
+    width: 18.75%; /* PRICE: 3/16 of the table width */
+}
+/* Make input fields fill their cells */
+#product-lines-table input {
+    width: 100%;
+    box-sizing: border-box;
+}
