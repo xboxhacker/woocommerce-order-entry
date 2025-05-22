@@ -78,6 +78,7 @@ jQuery(document).ready(function($) {
                     $('#city').val(data.city);
                     $('#state').val(data.state);
                     $('#zip').val(data.zip);
+                    $('#country').val(data.country || 'US');
                     $('#email').val(data.email);
                     $('#phone').val(data.phone);
                 }
