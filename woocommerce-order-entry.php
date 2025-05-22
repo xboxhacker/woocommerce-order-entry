@@ -2,7 +2,7 @@
 /*
 Plugin Name: WooCommerce Order Entry
 Description: A plugin to manually enter orders in WooCommerce with customer management, automatic paste parsing, and dynamic product lines.
-Version: 1.11
+Version: 1.13
 Author: William Hare & Grok3.0
 */
 
@@ -44,12 +44,12 @@ function wcoe_enqueue_scripts($hook) {
     if ($hook !== 'woocommerce_page_wcoe-order-entry') {
         return;
     }
-    wp_enqueue_script('wcoe-script', plugins_url('/wcoe-script.js', __FILE__), array('jquery'), '1.11', true);
-    wp_enqueue_style('wcoe-style', plugins_url('/wcoe-style.css', __FILE__), array(), '1.11');
+    wp_enqueue_script('wcoe-script', plugins_url('/wcoe-script.js', __FILE__), array('jquery'), '1.13', true);
+    wp_enqueue_style('wcoe-style', plugins_url('/wcoe-style.css', __FILE__), array(), '1.13');
 }
 add_action('admin_enqueue_scripts', 'wcoe_enqueue_scripts');
 
-// Get or create generic product
+// Get or create generic product with SKU "VEEQO"
 function wcoe_get_generic_product_id() {
     $product = get_posts(array(
         'post_type' => 'product',
@@ -58,7 +58,9 @@ function wcoe_get_generic_product_id() {
         'numberposts' => 1,
     ));
     if (!empty($product)) {
-        return $product[0]->ID;
+        $product_id = $product[0]->ID;
+        update_post_meta($product_id, '_sku', 'VEEQO');
+        return $product_id;
     } else {
         $product_id = wp_insert_post(array(
             'post_type' => 'product',
@@ -70,6 +72,7 @@ function wcoe_get_generic_product_id() {
             update_post_meta($product_id, '_price', 0);
             update_post_meta($product_id, '_visibility', 'hidden');
             update_post_meta($product_id, '_is_generic_product', 'yes');
+            update_post_meta($product_id, '_sku', 'VEEQO');
             return $product_id;
         }
         return 0;
@@ -90,6 +93,7 @@ function wcoe_ajax_get_customer_details() {
             'city' => get_post_meta($customer_id, '_city', true),
             'state' => get_post_meta($customer_id, '_state', true),
             'zip' => get_post_meta($customer_id, '_zip', true),
+            'country' => get_post_meta($customer_id, '_country', true),
             'email' => get_post_meta($customer_id, '_email', true),
             'phone' => get_post_meta($customer_id, '_phone', true),
         );
@@ -113,6 +117,7 @@ function wcoe_order_entry_page() {
         $city = sanitize_text_field($_POST['city']);
         $state = sanitize_text_field($_POST['state']);
         $zip = sanitize_text_field($_POST['zip']);
+        $country = sanitize_text_field($_POST['country']);
         $email = sanitize_email($_POST['email']);
         $phone = sanitize_text_field($_POST['phone']);
         $po_number = sanitize_text_field($_POST['po_number']);
@@ -121,7 +126,7 @@ function wcoe_order_entry_page() {
 
         // Save customer if checkbox is checked
         if (isset($_POST['save_customer']) && $_POST['save_customer'] == 'on') {
-            $address_hash = md5($address . $address2 . $city . $state . $zip);
+            $address_hash = md5($address . $address2 . $city . $state . $zip . $country);
             $existing = get_posts(array(
                 'post_type' => 'wcoe_customer',
                 'meta_key' => '_address_hash',
@@ -140,6 +145,7 @@ function wcoe_order_entry_page() {
                     update_post_meta($customer_id, '_city', $city);
                     update_post_meta($customer_id, '_state', $state);
                     update_post_meta($customer_id, '_zip', $zip);
+                    update_post_meta($customer_id, '_country', $country);
                     update_post_meta($customer_id, '_email', $email);
                     update_post_meta($customer_id, '_phone', $phone);
                     update_post_meta($customer_id, '_address_hash', $address_hash);
@@ -155,6 +161,7 @@ function wcoe_order_entry_page() {
         $order->set_billing_city($city);
         $order->set_billing_state($state);
         $order->set_billing_postcode($zip);
+        $order->set_billing_country($country);
         $order->set_billing_email($email);
         $order->set_billing_phone($phone);
         $order->set_shipping_first_name($name);
@@ -163,6 +170,7 @@ function wcoe_order_entry_page() {
         $order->set_shipping_city($city);
         $order->set_shipping_state($state);
         $order->set_shipping_postcode($zip);
+        $order->set_shipping_country($country);
 
         // Add PO number if provided
         if (!empty($po_number)) {
@@ -272,6 +280,15 @@ john.doe@example.com
                     <td><input type="text" id="zip" name="zip" class="regular-text" required></td>
                 </tr>
                 <tr>
+                    <th><label for="country"><?php _e('Country', 'woocommerce-order-entry'); ?></label></th>
+                    <td>
+                        <select id="country" name="country" required>
+                            <option value="US" selected>United States</option>
+                            <option value="CA">Canada</option>
+                        </select>
+                    </td>
+                </tr>
+                <tr>
                     <th><label for="email"><?php _e('Email', 'woocommerce-order-entry'); ?></label></th>
                     <td><input type="email" id="email" name="email" class="regular-text"></td>
                 </tr>
@@ -329,3 +346,20 @@ john.doe@example.com
     </div>
     <?php
 }
+
+// Display PO number on order details page
+add_action('woocommerce_admin_order_data_after_billing_address', 'wcoe_display_po_number_admin');
+function wcoe_display_po_number_admin($order) {
+    $po_number = $order->get_meta('_po_number');
+    if ($po_number) {
+        echo '<p><strong>PO Number:</strong> ' . esc_html($po_number) . '</p>';
+    }
+}
+
+// Make PO number searchable in admin order search
+add_filter('woocommerce_shop_order_search_fields', 'wcoe_include_po_number_in_search');
+function wcoe_include_po_number_in_search($search_fields) {
+    $search_fields[] = '_po_number';
+    return $search_fields;
+}
+?>
