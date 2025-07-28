@@ -86,6 +86,146 @@ jQuery(document).ready(function($) {
         }
     });
 
+    // Product search functionality
+    var searchTimeout;
+    var currentSearchRequest;
+    
+    function showSpinner() {
+        $('#search_spinner').show();
+    }
+    
+    function hideSpinner() {
+        $('#search_spinner').hide();
+    }
+    
+    function hideSearchResults() {
+        $('#search_results').hide().empty();
+    }
+    
+    function performProductSearch(searchTerm) {
+        if (searchTerm.length < 2) {
+            hideSearchResults();
+            return;
+        }
+        
+        showSpinner();
+        
+        // Cancel previous request if still pending
+        if (currentSearchRequest) {
+            currentSearchRequest.abort();
+        }
+        
+        var nonce = $('#wcoe_ajax_nonce').val();
+        currentSearchRequest = $.post(ajaxurl, {
+            action: 'wcoe_search_products',
+            search_term: searchTerm,
+            nonce: nonce
+        })
+        .done(function(response) {
+            hideSpinner();
+            if (response.success && response.data.length > 0) {
+                displaySearchResults(response.data);
+            } else {
+                hideSearchResults();
+            }
+        })
+        .fail(function(xhr) {
+            hideSpinner();
+            if (xhr.statusText !== 'abort') {
+                hideSearchResults();
+            }
+        })
+        .always(function() {
+            currentSearchRequest = null;
+        });
+    }
+    
+    function displaySearchResults(results) {
+        var $resultsContainer = $('#search_results');
+        $resultsContainer.empty();
+        
+        results.forEach(function(product) {
+            var $item = $('<div class="search-result-item">')
+                .data('product', product)
+                .html(
+                    '<span class="search-result-sku">' + (product.sku || 'No SKU') + '</span>' +
+                    '<span class="search-result-name">' + product.name + '</span>' +
+                    '<span class="search-result-price">$' + parseFloat(product.price || 0).toFixed(2) + '</span>'
+                );
+            $resultsContainer.append($item);
+        });
+        
+        $resultsContainer.show();
+    }
+    
+    // Handle search input with debouncing
+    $('#product_search').on('input', function() {
+        var searchTerm = $(this).val().trim();
+        
+        // Clear previous timeout
+        if (searchTimeout) {
+            clearTimeout(searchTimeout);
+        }
+        
+        // Hide results if search is cleared
+        if (searchTerm === '') {
+            hideSpinner();
+            hideSearchResults();
+            return;
+        }
+        
+        // Set new timeout for 300ms
+        searchTimeout = setTimeout(function() {
+            performProductSearch(searchTerm);
+        }, 300);
+    });
+    
+    // Handle clicking on search results
+    $(document).on('click', '.search-result-item', function() {
+        var product = $(this).data('product');
+        
+        // Find the currently focused product line or the last one
+        var $currentLine = $('.product-line').last();
+        var $skuInput = $currentLine.find('input[name$="[sku]"]');
+        var $descInput = $currentLine.find('input[name$="[description]"]');
+        var $priceInput = $currentLine.find('input[name$="[price]"]');
+        
+        // Check if current line is empty, if not, add a new line
+        if ($skuInput.val() !== '' || $descInput.val() !== '' || $priceInput.val() !== '') {
+            $('#add-product-line').click();
+            $currentLine = $('.product-line').last();
+            $skuInput = $currentLine.find('input[name$="[sku]"]');
+            $descInput = $currentLine.find('input[name$="[description]"]');
+            $priceInput = $currentLine.find('input[name$="[price]"]');
+        }
+        
+        // Populate the fields
+        $skuInput.val(product.sku || '');
+        $descInput.val(product.name || '');
+        $priceInput.val(parseFloat(product.price || 0).toFixed(2));
+        
+        // Clear search and hide results
+        $('#product_search').val('');
+        hideSearchResults();
+        
+        // Recalculate total
+        calculateTotal();
+    });
+    
+    // Hide search results when clicking outside
+    $(document).on('click', function(e) {
+        if (!$(e.target).closest('#product_search, #search_results').length) {
+            hideSearchResults();
+        }
+    });
+    
+    // Hide search results when search field loses focus (with delay for clicks)
+    $('#product_search').on('blur', function() {
+        setTimeout(function() {
+            hideSearchResults();
+        }, 200);
+    });
+
     // Product lines functionality
     var lineIndex = 1;
 
