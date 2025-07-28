@@ -46,6 +46,12 @@ function wcoe_enqueue_scripts($hook) {
     }
     wp_enqueue_script('wcoe-script', plugins_url('/wcoe-script.js', __FILE__), array('jquery'), '1.13', true);
     wp_enqueue_style('wcoe-style', plugins_url('/wcoe-style.css', __FILE__), array(), '1.13');
+    
+    // Localize script for AJAX
+    wp_localize_script('wcoe-script', 'wcoe_ajax', array(
+        'ajaxurl' => admin_url('admin-ajax.php'),
+        'nonce' => wp_create_nonce('wcoe_ajax_nonce')
+    ));
 }
 add_action('admin_enqueue_scripts', 'wcoe_enqueue_scripts');
 
@@ -101,6 +107,88 @@ function wcoe_ajax_get_customer_details() {
     } else {
         wp_send_json_error();
     }
+}
+
+// AJAX handler for product search
+add_action('wp_ajax_wcoe_search_products', 'wcoe_ajax_search_products');
+function wcoe_ajax_search_products() {
+    check_ajax_referer('wcoe_ajax_nonce', 'nonce');
+    $search_term = sanitize_text_field($_POST['search_term']);
+    
+    if (empty($search_term) || strlen($search_term) < 2) {
+        wp_send_json_success(array());
+        return;
+    }
+    
+    global $wpdb;
+    $results = array();
+    
+    // Search for products (including parent products and variations)
+    $product_query = "
+        SELECT DISTINCT p.ID, p.post_title, p.post_type, pm_sku.meta_value as sku, pm_price.meta_value as price
+        FROM {$wpdb->posts} p
+        LEFT JOIN {$wpdb->postmeta} pm_sku ON p.ID = pm_sku.post_id AND pm_sku.meta_key = '_sku'
+        LEFT JOIN {$wpdb->postmeta} pm_price ON p.ID = pm_price.post_id AND pm_price.meta_key = '_price'
+        WHERE p.post_type IN ('product', 'product_variation') 
+        AND p.post_status = 'publish'
+        AND (
+            p.post_title LIKE %s 
+            OR pm_sku.meta_value LIKE %s
+        )
+        ORDER BY 
+            CASE WHEN pm_sku.meta_value = %s THEN 0 ELSE 1 END,
+            CASE WHEN pm_sku.meta_value LIKE %s THEN 0 ELSE 1 END,
+            p.post_title
+        LIMIT 10
+    ";
+    
+    $like_term = '%' . $wpdb->esc_like($search_term) . '%';
+    $exact_term = $search_term;
+    $starts_with_term = $wpdb->esc_like($search_term) . '%';
+    
+    $products = $wpdb->get_results(
+        $wpdb->prepare($product_query, $like_term, $like_term, $exact_term, $starts_with_term)
+    );
+    
+    foreach ($products as $product) {
+        $product_obj = wc_get_product($product->ID);
+        if (!$product_obj) continue;
+        
+        $result = array(
+            'id' => $product->ID,
+            'sku' => $product->sku ?: '',
+            'name' => $product->post_title,
+            'price' => $product->price ?: $product_obj->get_price(),
+            'type' => $product->post_type
+        );
+        
+        // For variations, get parent product name and append variation attributes
+        if ($product->post_type === 'product_variation') {
+            $parent_id = wp_get_post_parent_id($product->ID);
+            if ($parent_id) {
+                $parent_product = get_post($parent_id);
+                $variation_obj = wc_get_product($product->ID);
+                $attributes = $variation_obj->get_variation_attributes();
+                $attribute_summary = '';
+                if (!empty($attributes)) {
+                    $attr_parts = array();
+                    foreach ($attributes as $key => $value) {
+                        if ($value) {
+                            $attr_parts[] = $value;
+                        }
+                    }
+                    if (!empty($attr_parts)) {
+                        $attribute_summary = ' (' . implode(', ', $attr_parts) . ')';
+                    }
+                }
+                $result['name'] = $parent_product->post_title . $attribute_summary;
+            }
+        }
+        
+        $results[] = $result;
+    }
+    
+    wp_send_json_success($results);
 }
 
 // Render the order entry page
@@ -314,6 +402,14 @@ john.doe@example.com
             </table>
 
             <h2>Product Lines</h2>
+            <div style="margin-bottom: 20px;">
+                <label for="product_search">Product Search</label>
+                <div style="position: relative; display: inline-block; width: 300px;">
+                    <input type="text" id="product_search" placeholder="Search by SKU or product name..." style="width: 100%; padding-right: 30px;">
+                    <div id="search_spinner" class="search-spinner" style="display: none;"></div>
+                    <div id="search_results" class="search-results"></div>
+                </div>
+            </div>
             <table id="product-lines-table">
                 <thead>
                     <tr>
