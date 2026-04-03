@@ -1,6 +1,79 @@
 jQuery(document).ready(function($) {
     let productLineCounter = 1;
     let searchTimeout;
+    let selectedLiveRate = null;
+    
+    /**
+     * Set state/province select from pasted text or saved value (2-letter or full name).
+     */
+    function setCustomerState(value) {
+        const $sel = $('#customer-state');
+        if (!$sel.length) return;
+        if (value === undefined || value === null || String(value).trim() === '') {
+            $sel.val('');
+            return;
+        }
+        let v = String(value).trim();
+        const upper = v.toUpperCase();
+        if ($sel.find('option').filter(function() { return $(this).val() === upper; }).length) {
+            $sel.val(upper);
+            return;
+        }
+        const map = (typeof wc_oe_ajax !== 'undefined' && wc_oe_ajax.state_name_to_abbr) ? wc_oe_ajax.state_name_to_abbr : {};
+        const key = v.toLowerCase();
+        if (map[key]) {
+            $sel.val(map[key]);
+            return;
+        }
+        $sel.val('');
+    }
+    
+    /**
+     * Apply parsed customer fields from server (always set when key present).
+     */
+    function applyParsedCustomerData(data) {
+        if (!data || typeof data !== 'object') return;
+        if (Object.prototype.hasOwnProperty.call(data, 'name')) $('#customer-name').val(data.name || '');
+        if (Object.prototype.hasOwnProperty.call(data, 'email')) $('#customer-email').val(data.email || '');
+        if (Object.prototype.hasOwnProperty.call(data, 'phone')) $('#customer-phone').val(data.phone || '');
+        if (Object.prototype.hasOwnProperty.call(data, 'address_1')) $('#customer-address1').val(data.address_1 || '');
+        if (Object.prototype.hasOwnProperty.call(data, 'address_2')) $('#customer-address2').val(data.address_2 || '');
+        if (Object.prototype.hasOwnProperty.call(data, 'city')) $('#customer-city').val(data.city || '');
+        if (Object.prototype.hasOwnProperty.call(data, 'postcode')) $('#customer-zip').val(data.postcode || '');
+        if (Object.prototype.hasOwnProperty.call(data, 'country')) $('#customer-country').val(data.country || 'US');
+        if (Object.prototype.hasOwnProperty.call(data, 'state')) setCustomerState(data.state);
+    }
+
+    function setLiveRatesMessage(message, isError) {
+        const $box = $('#live-rates-result');
+        if (!$box.length) return;
+        if (!message) {
+            $box.removeClass('error success').empty().hide();
+            return;
+        }
+        $box.removeClass('error success').addClass(isError ? 'error' : 'success').text(message).show();
+    }
+
+    function clearLiveRatesSelection() {
+        selectedLiveRate = null;
+        const $select = $('#live-rate-select');
+        $select.empty().append($('<option></option>').val('').text('Get live rates first...')).prop('disabled', true);
+    }
+
+    function applyLiveRate(rate) {
+        if (!rate || typeof rate !== 'object') return;
+        selectedLiveRate = rate;
+        const adjustedRaw = (rate.adjusted_amount !== undefined && rate.adjusted_amount !== null) ? rate.adjusted_amount : rate.amount;
+        if (adjustedRaw !== undefined && adjustedRaw !== null) {
+            const amount = parseFloat(adjustedRaw);
+            if (!isNaN(amount)) {
+                $('#shipping-amount').val(amount.toFixed(2));
+            }
+        }
+        const liveText = rate.live_amount_display || rate.amount_display || '$0.00';
+        const adjustedText = rate.adjusted_amount_display || rate.amount_display || '$0.00';
+        setLiveRatesMessage('Applied ' + rate.label + ' (Live ' + liveText + ', Adjusted ' + adjustedText + ') to Shipping Amount.', false);
+    }
     
     // Load saved customer
     $('#saved-customers').on('change', function() {
@@ -20,16 +93,16 @@ jQuery(document).ready(function($) {
                 $('#customer-address1').val(customer.address_1);
                 $('#customer-address2').val(customer.address_2);
                 $('#customer-city').val(customer.city);
-                $('#customer-state').val(customer.state);
+                setCustomerState(customer.state);
                 $('#customer-zip').val(customer.postcode);
                 $('#customer-country').val(customer.country);
                 $('#customer-po').val(customer.po_number);
+                $('#wc-oe-po-dup-msg').hide().text('');
             }
         });
     });
     
-    // Parse customer information
-    $('#parse-customer').on('click', function() {
+    function runParseCustomer() {
         const customerText = $('#paste-customer').val();
         if (!customerText.trim()) return;
         
@@ -39,18 +112,124 @@ jQuery(document).ready(function($) {
             nonce: wc_oe_ajax.nonce
         }, function(response) {
             if (response.success) {
-                const data = response.data;
-                if (data.name) $('#customer-name').val(data.name);
-                if (data.email) $('#customer-email').val(data.email);
-                if (data.phone) $('#customer-phone').val(data.phone);
-                if (data.address_1) $('#customer-address1').val(data.address_1);
-                if (data.address_2) $('#customer-address2').val(data.address_2);
-                if (data.city) $('#customer-city').val(data.city);
-                if (data.state) $('#customer-state').val(data.state);
-                if (data.postcode) $('#customer-zip').val(data.postcode);
-                if (data.country) $('#customer-country').val(data.country);
+                applyParsedCustomerData(response.data);
             }
         });
+    }
+    
+    // Parse customer information
+    $('#parse-customer').on('click', function() {
+        runParseCustomer();
+    });
+    
+    function checkPoDuplicate() {
+        const po = $('#customer-po').val().trim();
+        const $msg = $('#wc-oe-po-dup-msg');
+        $msg.hide().text('');
+        if (!po) return;
+        $.post(wc_oe_ajax.ajax_url, {
+            action: 'wc_oe_check_po_duplicate',
+            po_number: po,
+            nonce: wc_oe_ajax.nonce
+        }, function(response) {
+            if (response.success && response.data && response.data.duplicate && response.data.message) {
+                $msg.text(response.data.message).show();
+            }
+        });
+    }
+    
+    $('#customer-po').on('blur', function() {
+        checkPoDuplicate();
+    });
+    
+    $('#customer-po').on('input', function() {
+        $('#wc-oe-po-dup-msg').hide().text('');
+    });
+
+    $('#get-live-rates').on('click', function() {
+        const city = ($('#customer-city').val() || '').trim();
+        const state = $('#customer-state').val() || '';
+        const postcode = ($('#customer-zip').val() || '').trim();
+        const country = $('#customer-country').val() || 'US';
+        const weight = parseFloat($('#pkg-weight').val());
+        const length = parseFloat($('#pkg-length').val());
+        const width = parseFloat($('#pkg-width').val());
+        const height = parseFloat($('#pkg-height').val());
+        const $btn = $(this);
+
+        if (!city || !state || !postcode || !country) {
+            setLiveRatesMessage('Enter city, state/province, postal code, and country before requesting rates.', true);
+            return;
+        }
+        if (isNaN(weight) || weight <= 0 || isNaN(length) || length <= 0 || isNaN(width) || width <= 0 || isNaN(height) || height <= 0) {
+            setLiveRatesMessage('Enter valid package weight, length, width, and height values greater than zero.', true);
+            return;
+        }
+
+        clearLiveRatesSelection();
+        setLiveRatesMessage('Fetching live rates...', false);
+        $btn.prop('disabled', true);
+
+        $.post(wc_oe_ajax.ajax_url, {
+            action: 'wc_oe_get_live_rates',
+            city: city,
+            state: state,
+            postcode: postcode,
+            country: country,
+            weight: weight,
+            length: length,
+            width: width,
+            height: height,
+            nonce: wc_oe_ajax.nonce
+        }, function(response) {
+            $btn.prop('disabled', false);
+            if (!response.success || !response.data || !response.data.rates || !response.data.rates.length) {
+                setLiveRatesMessage((response && response.data) ? response.data : 'No rates returned.', true);
+                return;
+            }
+
+            const rates = response.data.rates;
+            const $select = $('#live-rate-select');
+            $select.empty();
+            rates.forEach(function(rate, idx) {
+                const liveText = rate.live_amount_display || rate.amount_display || '$0.00';
+                const adjustedText = rate.adjusted_amount_display || rate.amount_display || '$0.00';
+                const text = rate.label + ' - Live ' + liveText + ' / Adjusted ' + adjustedText;
+                const $opt = $('<option></option>').val(rate.id || ('rate-' + idx)).text(text).data('rate', rate);
+                if (idx === 0) {
+                    $opt.prop('selected', true);
+                }
+                $select.append($opt);
+            });
+            $select.prop('disabled', false);
+            setLiveRatesMessage('Loaded ' + rates.length + ' live rate option(s).', false);
+            applyLiveRate(rates[0]);
+        }).fail(function() {
+            $btn.prop('disabled', false);
+            setLiveRatesMessage('Failed to fetch rates. Please try again.', true);
+        });
+    });
+
+    $('#live-rate-select').on('change', function() {
+        const $selected = $(this).find('option:selected');
+        const rate = $selected.data('rate');
+        if (rate) {
+            applyLiveRate(rate);
+        }
+    });
+
+    $('#customer-city, #customer-state, #customer-zip, #customer-country, #pkg-weight, #pkg-length, #pkg-width, #pkg-height').on('change input', function() {
+        selectedLiveRate = null;
+    });
+    
+    // Parse automatically after paste (user can still edit before submitting)
+    $('#paste-customer').on('paste', function() {
+        const $ta = $(this);
+        setTimeout(function() {
+            if ($ta.val().trim().length > 10) {
+                runParseCustomer();
+            }
+        }, 50);
     });
     
     // Product search functionality with spinner
@@ -109,10 +288,37 @@ jQuery(document).ready(function($) {
         
         $productLine.find('.product-sku').val(product.sku);
         $productLine.find('.product-description').val(product.name);
-        $productLine.find('.product-price').val(product.price);
+        const p = parseFloat(product.price);
+        $productLine.find('.product-price').val(isNaN(p) ? '0.00' : p.toFixed(2));
         $productLine.find('.product-id').val(product.id);
         
         $(this).parent().empty().hide();
+    });
+    
+    function productPriceIsZero(val) {
+        if (val === '' || val === null || val === undefined) return true;
+        const n = parseFloat(String(val).replace(/,/g, ''));
+        return !isNaN(n) && n === 0;
+    }
+    
+    $(document).on('focus', '.product-price', function() {
+        const $el = $(this);
+        if (productPriceIsZero($el.val())) {
+            $el.val('');
+        }
+    });
+    
+    $(document).on('blur', '.product-price', function() {
+        const $el = $(this);
+        let v = $el.val();
+        if (v === '' || v === null || String(v).trim() === '') {
+            $el.val('0.00');
+            return;
+        }
+        const p = parseFloat(String(v).replace(/,/g, ''));
+        if (!isNaN(p)) {
+            $el.val(p.toFixed(2));
+        }
     });
     
     // Hide search results when clicking outside
@@ -131,20 +337,19 @@ jQuery(document).ready(function($) {
         $newLine.find('.product-line-header h4').text('Product Line ' + productLineCounter);
         $newLine.find('input').val('');
         $newLine.find('.product-quantity').val('1');
+        $newLine.find('.product-price').val('0.00');
         $newLine.find('.product-search-results').empty().hide();
         $newLine.find('.search-spinner').removeClass('show');
         
         $('#product-lines-container').append($newLine);
     });
     
-    // Remove product line
+    // Remove product line (at least one line kept for adding products)
     $('#remove-product-line').on('click', function() {
         const $lines = $('.product-line');
         if ($lines.length > 1) {
             $lines.last().remove();
             productLineCounter--;
-        } else {
-            alert('Cannot remove all product lines. At least one line is required.');
         }
     });
     
@@ -173,37 +378,65 @@ jQuery(document).ready(function($) {
         const $button = $(this);
         const $result = $('#order-result');
         
-        // Validate required fields
-        if (!$('#customer-name').val() || !$('#customer-email').val()) {
-            $result.removeClass('success').addClass('error').text('Please fill in required customer fields.').show();
+        // Validate required fields (only name is required)
+        if (!$('#customer-name').val().trim()) {
+            $result.removeClass('success').addClass('error').text('Please enter customer name.').show();
             return;
         }
         
-        // Validate product lines
-        let validLines = true;
+        // Collect product lines that have all fields filled (products section is optional)
         const productLines = [];
+        let validLines = true;
         
         $('.product-line').each(function() {
             const quantity = $(this).find('.product-quantity').val();
             const productId = $(this).find('.product-id').val();
+            const description = $(this).find('.product-description').val();
             const price = $(this).find('.product-price').val();
+            const hasProduct = productId || (description && description.trim());
+            const hasAny = quantity || productId || description || price;
+            const hasAll = quantity && hasProduct && price;
             
-            if (!quantity || !productId || !price) {
+            if (hasAny && !hasAll) {
                 validLines = false;
                 return false;
             }
-            
-            productLines.push({
-                quantity: quantity,
-                product_id: productId,
-                price: price
-            });
+            if (hasAll) {
+                productLines.push({
+                    quantity: quantity,
+                    product_id: productId,
+                    description: description ? description.trim() : '',
+                    price: price
+                });
+            }
         });
         
         if (!validLines) {
-            $result.removeClass('success').addClass('error').text('Please complete all product lines.').show();
+            $result.removeClass('success').addClass('error').text('Please complete any product line you started (quantity, product, and price).').show();
             return;
         }
+        
+        const retailerId = $('#order-retailer').val();
+        const shippingRaw = $('#shipping-amount').val();
+        const shippingStr = shippingRaw === undefined || shippingRaw === null ? '' : String(shippingRaw).trim();
+        if (retailerId) {
+            if (shippingStr === '') {
+                $result.removeClass('success').addClass('error').text('Shipping amount is required when a retailer is selected.').show();
+                return;
+            }
+            const shippingNum = parseFloat(shippingStr);
+            if (isNaN(shippingNum)) {
+                $result.removeClass('success').addClass('error').text('Enter a valid shipping amount.').show();
+                return;
+            }
+            if (shippingNum < 0) {
+                $result.removeClass('success').addClass('error').text('Shipping amount cannot be negative.').show();
+                return;
+            }
+        }
+        
+        // Server validates PO; clear any stale blur warning so it cannot block submit.
+        $('#wc-oe-po-dup-msg').hide().text('');
         
         $button.prop('disabled', true).text('Creating Order...');
         $result.hide();
@@ -226,6 +459,17 @@ jQuery(document).ready(function($) {
                 country: $('#customer-country').val(),
                 po_number: $('#customer-po').val(),
                 product_lines: productLines,
+                shipping_amount: $('#shipping-amount').val() || 0,
+                retailer_id: $('#order-retailer').val() || 0,
+                shipping_quote_id: selectedLiveRate ? (selectedLiveRate.id || '') : '',
+                shipping_quote_carrier: selectedLiveRate ? (selectedLiveRate.carrier || '') : '',
+                shipping_quote_service: selectedLiveRate ? (selectedLiveRate.service || '') : '',
+                shipping_quote_amount: selectedLiveRate ? (selectedLiveRate.adjusted_amount || selectedLiveRate.amount || 0) : 0,
+                package_weight: $('#pkg-weight').val() || 0,
+                package_length: $('#pkg-length').val() || 0,
+                package_width: $('#pkg-width').val() || 0,
+                package_height: $('#pkg-height').val() || 0,
+                apply_tax: $('#apply-tax').is(':checked') ? 1 : 0,
                 nonce: wc_oe_ajax.nonce
             };
             
@@ -233,9 +477,8 @@ jQuery(document).ready(function($) {
                 $button.prop('disabled', false).text('Create Order');
                 
                 if (response.success) {
-                    $result.removeClass('error').addClass('success')
-                        .html('Order created successfully! <a href="' + response.data.order_url + '" class="order-link" target="_blank">View Order #' + response.data.order_id + '</a>')
-                        .show();
+                    const msg = 'Order created successfully! <a href="' + response.data.order_url + '" class="order-link" target="_blank">View Order #' + response.data.order_id + '</a>';
+                    $result.removeClass('error').addClass('success').html(msg).show();
                     
                     // Reset form
                     resetForm();
@@ -249,20 +492,121 @@ jQuery(document).ready(function($) {
         });
     });
     
+    // New Order Entry button - reset form and scroll to top
+    $('#wc-oe-new-order-btn').on('click', function() {
+        resetForm();
+        $('#order-result').hide();
+        $('html, body').animate({ scrollTop: 0 }, 200);
+    });
+    
     function resetForm() {
         // Reset customer form
-        $('#customer-name, #customer-email, #customer-phone, #customer-address1, #customer-address2, #customer-city, #customer-state, #customer-zip, #customer-po').val('');
+        $('#customer-name, #customer-email, #customer-phone, #customer-address1, #customer-address2, #customer-city, #customer-zip, #customer-po').val('');
         $('#customer-country').val('US'); // Reset to US default
+        setCustomerState('');
         $('#save-customer').prop('checked', false);
         $('#paste-customer').val('');
         $('#saved-customers').val('');
-        
+        $('#wc-oe-po-dup-msg').hide().text('');
+        $('#pkg-weight, #pkg-length, #pkg-width, #pkg-height').val('');
+        clearLiveRatesSelection();
+        setLiveRatesMessage('', false);
+
         // Reset product lines
         $('.product-line:not(:first)').remove();
         $('.product-line:first input').val('');
         $('.product-line:first .product-quantity').val('1');
+        $('.product-line:first .product-price').val('0.00');
         $('.product-search-results').empty().hide();
         $('.search-spinner').removeClass('show');
         productLineCounter = 1;
+        
+        // Reset shipping, retailer, and tax
+        $('#shipping-amount').val('0');
+        $('#order-retailer').val('');
+        $('#apply-tax').prop('checked', false);
     }
+    
+    // Add retailer
+    $('#add-retailer').on('click', function() {
+        const name = $('#new-retailer-name').val().trim();
+        const email = $('#new-retailer-email').val().trim();
+        if (!name || !email) {
+            alert('Please enter retailer name and email.');
+            return;
+        }
+        $.post(wc_oe_ajax.ajax_url, {
+            action: 'wc_oe_save_retailer',
+            name: name,
+            email: email,
+            nonce: wc_oe_ajax.nonce
+        }, function(response) {
+            if (response.success) {
+                const $item = $('<div class="wc-oe-retailer-item" data-id="' + response.data.id + '"></div>');
+                $item.append($('<span></span>').text(name + ' (' + email + ')'));
+                $item.append($('<button type="button" class="button-link-delete delete-retailer">Delete</button>'));
+                $('.wc-oe-retailers-list .wc-oe-no-retailers').remove();
+                $('.wc-oe-retailers-list').append($item);
+                $('#new-retailer-name, #new-retailer-email').val('');
+            } else {
+                alert(response.data || 'Failed to add retailer.');
+            }
+        });
+    });
+    
+    // Send test invoice
+    $('#send-test-invoice').on('click', function() {
+        const email = $('#test-invoice-email').val().trim();
+        const $btn = $(this);
+        const $result = $('#test-invoice-result');
+        if (!email) {
+            $result.removeClass('success').addClass('error').text('Please enter an email address.').show();
+            return;
+        }
+        $btn.prop('disabled', true);
+        $result.hide();
+        $.post(wc_oe_ajax.ajax_url, {
+            action: 'wc_oe_send_test_invoice',
+            email: email,
+            nonce: wc_oe_ajax.nonce
+        }, function(response) {
+            $btn.prop('disabled', false);
+            if (response.success) {
+                $result.removeClass('error').addClass('success').text(response.data).show();
+            } else {
+                $result.removeClass('success').addClass('error').text(response.data || 'Failed to send.').show();
+            }
+        }).fail(function() {
+            $btn.prop('disabled', false);
+            $result.removeClass('success').addClass('error').text('Network error.').show();
+        });
+    });
+    
+    // Delete retailer
+    function refreshShippingRequirementHint() {
+        const show = !!$('#order-retailer').val();
+        $('.wc-oe-shipping-req-hint').toggle(show);
+    }
+    $('#order-retailer').on('change', refreshShippingRequirementHint);
+    refreshShippingRequirementHint();
+    
+    $(document).on('click', '.delete-retailer', function() {
+        const $item = $(this).closest('.wc-oe-retailer-item');
+        const id = $item.data('id');
+        if (!confirm('Delete this retailer?')) return;
+        $.post(wc_oe_ajax.ajax_url, {
+            action: 'wc_oe_delete_retailer',
+            retailer_id: id,
+            nonce: wc_oe_ajax.nonce
+        }, function(response) {
+            if (response.success) {
+                $item.remove();
+                if ($('.wc-oe-retailer-item').length === 0) {
+                    $('.wc-oe-retailers-list').append('<p class="wc-oe-no-retailers">No retailers yet. Add one above.</p>');
+                }
+            } else {
+                alert(response.data || 'Failed to delete retailer.');
+            }
+        });
+    });
 });

@@ -194,6 +194,23 @@
     border: 1px solid #f5c6cb;
 }
 
+#test-invoice-result {
+    padding: 10px;
+    border-radius: 3px;
+}
+
+#test-invoice-result.success {
+    background: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+#test-invoice-result.error {
+    background: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
 .order-link {
     display: inline-block;
     margin-top: 10px;
@@ -207,6 +224,98 @@
 .order-link:hover {
     background: #005a87;
     color: white;
+}
+
+.wc-oe-description {
+    color: #666;
+    font-size: 13px;
+    margin-bottom: 15px;
+}
+
+.wc-oe-retailers-section {
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px solid #ddd;
+}
+
+.wc-oe-retailers-section h4 {
+    margin: 0 0 10px 0;
+}
+
+.wc-oe-retailers-add {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 15px;
+    flex-wrap: wrap;
+}
+
+.wc-oe-retailers-add input {
+    padding: 6px 10px;
+    min-width: 150px;
+}
+
+.wc-oe-retailers-list {
+    margin-top: 10px;
+}
+
+.wc-oe-retailer-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 10px;
+    background: #f9f9f9;
+    border: 1px solid #ddd;
+    margin-bottom: 5px;
+    border-radius: 3px;
+}
+
+.wc-oe-retailer-item .delete-retailer {
+    color: #b32d2e;
+    cursor: pointer;
+}
+
+.wc-oe-retailer-item .delete-retailer:hover {
+    color: #dc3232;
+}
+
+.wc-oe-no-retailers {
+    color: #666;
+    font-style: italic;
+}
+
+#order-result .email-error {
+    color: #b32d2e;
+}
+
+.wc-oe-footer {
+    margin-top: 8px;
+    padding: 12px 0 0;
+    border-top: 1px solid #dcdcde;
+    color: #646970;
+    font-size: 12px;
+}
+
+.wc-oe-footer p {
+    margin: 0;
+}
+
+.wc-oe-live-rates-result {
+    margin-top: 8px;
+    display: none;
+    padding: 8px 10px;
+    border-radius: 4px;
+}
+
+.wc-oe-live-rates-result.success {
+    background: #ecf7ed;
+    border: 1px solid #8bc48f;
+    color: #1f6f2f;
+}
+
+.wc-oe-live-rates-result.error {
+    background: #fcf0f1;
+    border: 1px solid #e2a1a6;
+    color: #8f1d2c;
 }
 
 @media (max-width: 768px) {
