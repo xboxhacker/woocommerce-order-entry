@@ -38,6 +38,19 @@ A comprehensive WordPress plugin that allows administrators to manually create W
 - WooCommerce 3.0 or higher
 - PHP 7.0 or higher
 
+### PDF Invoice Attachment
+
+The plugin includes a pre-built `vendor/` folder with Dompdf, so PDF invoices work out of the box. No Composer setup is required.
+
+If you prefer to manage dependencies with Composer (e.g. for updates), run:
+
+```bash
+cd wp-content/plugins/woocommerce-order-entry
+composer install
+```
+
+Without the vendor folder, invoices are sent as HTML in the email body (which can still be printed to PDF from your email client).
+
 ## Usage
 
 ### Creating an Order

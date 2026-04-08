@@ -1,0 +1,9 @@
+{
+    "name": "xboxhacker/woocommerce-order-entry",
+    "require": {
+        "dompdf/dompdf": "^2.0"
+    },
+    "config": {
+        "optimize-autoloader": true
+    }
+}

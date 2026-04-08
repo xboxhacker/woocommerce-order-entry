@@ -3,7 +3,7 @@
  * Plugin Name: WooCommerce Order Entry
  * Plugin URI: https://github.com/xboxhacker/woocommerce-order-entry
  * Description: A plugin to manually create WooCommerce orders with customer information and product selection.
- * Version: 1.4.4
+ * Version: 1.4.5
  * Author: xboxhacker
  * License: GPL v2 or later
  * Text Domain: wc-order-entry
@@ -21,7 +21,7 @@ if (!defined('ABSPATH')) {
 // Define plugin constants
 define('WC_OE_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('WC_OE_PLUGIN_PATH', plugin_dir_path(__FILE__));
-define('WC_OE_VERSION', '1.4.4');
+define('WC_OE_VERSION', '1.4.5');
 
 class WC_Order_Entry {
     
@@ -44,6 +44,7 @@ class WC_Order_Entry {
         add_action('wp_ajax_wc_oe_search_products', array($this, 'ajax_search_products'));
         add_action('wp_ajax_wc_oe_save_customer', array($this, 'ajax_save_customer'));
         add_action('wp_ajax_wc_oe_load_customer', array($this, 'ajax_load_customer'));
+        add_action('wp_ajax_wc_oe_delete_customer', array($this, 'ajax_delete_customer'));
         add_action('wp_ajax_wc_oe_parse_customer', array($this, 'ajax_parse_customer'));
         add_action('wp_ajax_wc_oe_create_order', array($this, 'ajax_create_order'));
         add_action('wp_ajax_wc_oe_check_po_duplicate', array($this, 'ajax_check_po_duplicate'));
@@ -113,6 +114,12 @@ class WC_Order_Entry {
             postcode varchar(20),
             country varchar(5) DEFAULT 'US',
             po_number varchar(100),
+            retailer_id mediumint(9) DEFAULT 0,
+            shipping_amount decimal(10,2) DEFAULT 0.00,
+            package_weight decimal(10,2) DEFAULT 0.00,
+            package_length decimal(10,2) DEFAULT 0.00,
+            package_width decimal(10,2) DEFAULT 0.00,
+            package_height decimal(10,2) DEFAULT 0.00,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (id)
         ) $charset_collate;";
@@ -767,26 +774,59 @@ class WC_Order_Entry {
         
         global $wpdb;
         $table_name = $wpdb->prefix . 'wc_oe_customers';
+        $customer_id = isset($_POST['customer_id']) ? intval($_POST['customer_id']) : 0;
         
         $customer_data = array(
-            'name' => sanitize_text_field($_POST['name']),
-            'email' => sanitize_email($_POST['email']),
-            'phone' => sanitize_text_field($_POST['phone']),
-            'address_1' => sanitize_text_field($_POST['address_1']),
-            'address_2' => sanitize_text_field($_POST['address_2']),
-            'city' => sanitize_text_field($_POST['city']),
-            'state' => sanitize_text_field($_POST['state']),
-            'postcode' => sanitize_text_field($_POST['postcode']),
-            'country' => sanitize_text_field($_POST['country']),
-            'po_number' => sanitize_text_field($_POST['po_number'])
+            'name' => isset($_POST['name']) ? sanitize_text_field(wp_unslash($_POST['name'])) : '',
+            'email' => isset($_POST['email']) ? sanitize_email(wp_unslash($_POST['email'])) : '',
+            'phone' => isset($_POST['phone']) ? sanitize_text_field(wp_unslash($_POST['phone'])) : '',
+            'address_1' => isset($_POST['address_1']) ? sanitize_text_field(wp_unslash($_POST['address_1'])) : '',
+            'address_2' => isset($_POST['address_2']) ? sanitize_text_field(wp_unslash($_POST['address_2'])) : '',
+            'city' => isset($_POST['city']) ? sanitize_text_field(wp_unslash($_POST['city'])) : '',
+            'state' => isset($_POST['state']) ? sanitize_text_field(wp_unslash($_POST['state'])) : '',
+            'postcode' => isset($_POST['postcode']) ? sanitize_text_field(wp_unslash($_POST['postcode'])) : '',
+            'country' => isset($_POST['country']) ? sanitize_text_field(wp_unslash($_POST['country'])) : 'US',
+            'po_number' => isset($_POST['po_number']) ? sanitize_text_field(wp_unslash($_POST['po_number'])) : '',
+            'retailer_id' => isset($_POST['retailer_id']) ? intval($_POST['retailer_id']) : 0,
+            'shipping_amount' => isset($_POST['shipping_amount']) ? floatval($_POST['shipping_amount']) : 0,
+            'package_weight' => isset($_POST['package_weight']) ? floatval($_POST['package_weight']) : 0,
+            'package_length' => isset($_POST['package_length']) ? floatval($_POST['package_length']) : 0,
+            'package_width' => isset($_POST['package_width']) ? floatval($_POST['package_width']) : 0,
+            'package_height' => isset($_POST['package_height']) ? floatval($_POST['package_height']) : 0,
         );
-        
+
+        if (empty($customer_data['name'])) {
+            wp_send_json_error(__('Customer name is required.', 'wc-order-entry'));
+        }
+
+        if ($customer_id > 0) {
+            $result = $wpdb->update($table_name, $customer_data, array('id' => $customer_id));
+            if ($result !== false) {
+                wp_send_json_success(array(
+                    'id' => $customer_id,
+                    'updated' => true,
+                    'name' => $customer_data['name'],
+                    'email' => $customer_data['email'],
+                    'message' => __('Customer updated successfully.', 'wc-order-entry'),
+                ));
+                return;
+            }
+            wp_send_json_error(__('Failed to update customer.', 'wc-order-entry'));
+            return;
+        }
+
         $result = $wpdb->insert($table_name, $customer_data);
-        
+
         if ($result) {
-            wp_send_json_success('Customer saved successfully');
+            wp_send_json_success(array(
+                'id' => intval($wpdb->insert_id),
+                'updated' => false,
+                'name' => $customer_data['name'],
+                'email' => $customer_data['email'],
+                'message' => __('Customer saved successfully.', 'wc-order-entry'),
+            ));
         } else {
-            wp_send_json_error('Failed to save customer');
+            wp_send_json_error(__('Failed to save customer.', 'wc-order-entry'));
         }
     }
     
@@ -804,6 +844,25 @@ class WC_Order_Entry {
         } else {
             wp_send_json_error('Customer not found');
         }
+    }
+
+    public function ajax_delete_customer() {
+        check_ajax_referer('wc_oe_nonce', 'nonce');
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'wc_oe_customers';
+        $customer_id = isset($_POST['customer_id']) ? intval($_POST['customer_id']) : 0;
+
+        if ($customer_id <= 0) {
+            wp_send_json_error(__('Invalid customer.', 'wc-order-entry'));
+        }
+
+        $result = $wpdb->delete($table_name, array('id' => $customer_id));
+        if ($result !== false && $result > 0) {
+            wp_send_json_success(__('Customer deleted.', 'wc-order-entry'));
+        }
+
+        wp_send_json_error(__('Failed to delete customer.', 'wc-order-entry'));
     }
     
     public function ajax_parse_customer() {

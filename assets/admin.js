@@ -44,6 +44,12 @@ jQuery(document).ready(function($) {
         if (Object.prototype.hasOwnProperty.call(data, 'state')) setCustomerState(data.state);
     }
 
+    function customerOptionLabel(name, email) {
+        const cleanName = (name || '').trim();
+        const cleanEmail = (email || '').trim();
+        return cleanName + (cleanEmail ? ' (' + cleanEmail + ')' : '');
+    }
+
     function setLiveRatesMessage(message, isError) {
         const $box = $('#live-rates-result');
         if (!$box.length) return;
@@ -97,6 +103,15 @@ jQuery(document).ready(function($) {
                 $('#customer-zip').val(customer.postcode);
                 $('#customer-country').val(customer.country);
                 $('#customer-po').val(customer.po_number);
+                $('#order-retailer').val(customer.retailer_id || '');
+                $('#shipping-amount').val(customer.shipping_amount !== undefined && customer.shipping_amount !== null ? customer.shipping_amount : '0');
+                $('#pkg-weight').val(customer.package_weight || '');
+                $('#pkg-length').val(customer.package_length || '');
+                $('#pkg-width').val(customer.package_width || '');
+                $('#pkg-height').val(customer.package_height || '');
+                refreshShippingRequirementHint();
+                selectedLiveRate = null;
+                setLiveRatesMessage('', false);
                 $('#wc-oe-po-dup-msg').hide().text('');
             }
         });
@@ -357,6 +372,7 @@ jQuery(document).ready(function($) {
     function saveCustomer() {
         const customerData = {
             action: 'wc_oe_save_customer',
+            customer_id: $('#saved-customers').val() || 0,
             name: $('#customer-name').val(),
             email: $('#customer-email').val(),
             phone: $('#customer-phone').val(),
@@ -367,11 +383,62 @@ jQuery(document).ready(function($) {
             postcode: $('#customer-zip').val(),
             country: $('#customer-country').val(),
             po_number: $('#customer-po').val(),
+            retailer_id: $('#order-retailer').val() || 0,
+            shipping_amount: $('#shipping-amount').val() || 0,
+            package_weight: $('#pkg-weight').val() || 0,
+            package_length: $('#pkg-length').val() || 0,
+            package_width: $('#pkg-width').val() || 0,
+            package_height: $('#pkg-height').val() || 0,
             nonce: wc_oe_ajax.nonce
         };
         
         return $.post(wc_oe_ajax.ajax_url, customerData);
     }
+
+    $('#update-saved-customer').on('click', function() {
+        const selectedId = $('#saved-customers').val();
+        const $msg = $('#saved-customer-result');
+        if (!selectedId) {
+            $msg.removeClass('success').addClass('error').text('Select a saved customer first.').show();
+            return;
+        }
+        saveCustomer().done(function(response) {
+            if (!response || !response.success || !response.data) {
+                $msg.removeClass('success').addClass('error').text((response && response.data) ? response.data : 'Failed to update customer.').show();
+                return;
+            }
+            const label = customerOptionLabel(response.data.name, response.data.email);
+            $('#saved-customers option[value="' + selectedId + '"]').text(label);
+            $msg.removeClass('error').addClass('success').text(response.data.message || 'Customer updated.').show();
+        }).fail(function() {
+            $msg.removeClass('success').addClass('error').text('Network error while updating customer.').show();
+        });
+    });
+
+    $('#delete-saved-customer').on('click', function() {
+        const selectedId = $('#saved-customers').val();
+        const $msg = $('#saved-customer-result');
+        if (!selectedId) {
+            $msg.removeClass('success').addClass('error').text('Select a saved customer first.').show();
+            return;
+        }
+        if (!confirm('Delete this saved customer?')) return;
+        $.post(wc_oe_ajax.ajax_url, {
+            action: 'wc_oe_delete_customer',
+            customer_id: selectedId,
+            nonce: wc_oe_ajax.nonce
+        }, function(response) {
+            if (!response.success) {
+                $msg.removeClass('success').addClass('error').text((response && response.data) ? response.data : 'Failed to delete customer.').show();
+                return;
+            }
+            $('#saved-customers option[value="' + selectedId + '"]').remove();
+            $('#saved-customers').val('');
+            $msg.removeClass('error').addClass('success').text('Customer deleted.').show();
+        }).fail(function() {
+            $msg.removeClass('success').addClass('error').text('Network error while deleting customer.').show();
+        });
+    });
     
     // Submit order
     $('#submit-order').on('click', function() {
@@ -441,10 +508,16 @@ jQuery(document).ready(function($) {
         $button.prop('disabled', true).text('Creating Order...');
         $result.hide();
         
+        const shouldSaveCustomer = $('#save-customer').is(':checked');
+        let savedCustomerData = null;
         // Save customer if checkbox is checked
-        const saveCustomerPromise = $('#save-customer').is(':checked') ? saveCustomer() : $.Deferred().resolve();
+        const saveCustomerPromise = shouldSaveCustomer ? saveCustomer() : $.Deferred().resolve();
         
-        saveCustomerPromise.always(function() {
+        saveCustomerPromise.done(function(saveResponse) {
+            if (saveResponse && saveResponse.success && saveResponse.data) {
+                savedCustomerData = saveResponse.data;
+            }
+        }).always(function() {
             // Create order
             const orderData = {
                 action: 'wc_oe_create_order',
@@ -477,8 +550,23 @@ jQuery(document).ready(function($) {
                 $button.prop('disabled', false).text('Create Order');
                 
                 if (response.success) {
+                    if (savedCustomerData) {
+                        const customerId = String(savedCustomerData.id);
+                        const label = customerOptionLabel(savedCustomerData.name, savedCustomerData.email);
+                        const $existing = $('#saved-customers option[value="' + customerId + '"]');
+                        if ($existing.length) {
+                            $existing.text(label);
+                        } else {
+                            $('#saved-customers').append($('<option></option>').val(customerId).text(label));
+                        }
+                    }
                     const msg = 'Order created successfully! <a href="' + response.data.order_url + '" class="order-link" target="_blank">View Order #' + response.data.order_id + '</a>';
-                    $result.removeClass('error').addClass('success').html(msg).show();
+                    if (shouldSaveCustomer && !savedCustomerData) {
+                        // Keep order creation successful but warn that customer profile was not saved.
+                        $result.removeClass('error').addClass('success').html(msg + '<br><span class="email-error">Order was created, but saved customer update failed.</span>').show();
+                    } else {
+                        $result.removeClass('error').addClass('success').html(msg).show();
+                    }
                     
                     // Reset form
                     resetForm();
@@ -507,6 +595,7 @@ jQuery(document).ready(function($) {
         $('#save-customer').prop('checked', false);
         $('#paste-customer').val('');
         $('#saved-customers').val('');
+        $('#saved-customer-result').hide().removeClass('success error').text('');
         $('#wc-oe-po-dup-msg').hide().text('');
         $('#pkg-weight, #pkg-length, #pkg-width, #pkg-height').val('');
         clearLiveRatesSelection();
