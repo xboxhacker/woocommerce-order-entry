@@ -1,123 +1,114 @@
-# WooCommerce Order Entry Plugin
+# WooCommerce Order Entry
 
-A comprehensive WordPress plugin that allows administrators to manually create WooCommerce orders through an intuitive GUI interface with a copy and paste customer address option. No need to type out the customer information.
+WordPress / WooCommerce plugin for manually creating drop-ship and retailer orders from a dedicated admin screen. Paste customer addresses, pick products, pull live shipping rates, create the order, then view/send invoices and packing slips from the order itself.
+
+**Current version:** 1.5.8
 
 ## Features
 
-### Customer Management
-- Manual customer information entry with all required fields
-- Save customers to database for future use
-- Load previously saved customers from dropdown
-- Parse customer information from pasted text with enhanced address parsing
-- Automatic field population based on parsed data
-- **Country selection between United States and Canada** (defaults to United States)
+### Customer management
+- Paste customer info and auto-fill name, address, city/state/ZIP, phone, and email
+- State/province is a **2-letter dropdown** (US + Canada, including **Puerto Rico / PR**)
+- Secondary address lines (`Apt`, `Suite`, `Unit`, `#…`, etc.) parse into **Additional Address Line**
+- Phone parsing strips labels like `Phone:` and keeps digits only
+- ZIP+4 values are not mistaken for phone numbers
+- Save / load / **update** / **delete** saved customers
+- Saved customers also store retailer, shipping amount, and package dimensions/weight for reuse
 
-### Product Management
-- Dynamic product line creation with quantity, SKU, description, and price
-- Real-time product search by SKU or name
-- Product selection from WooCommerce inventory
-- Add/remove product lines with validation
-- Automatic price population from selected products
+### Product lines
+- Search WooCommerce products by SKU or name
+- Quantity, description, and price per line
+- Price fields default to `0.00` and clear on focus for easy paste
+- Custom description-only lines become real **product line items** (placeholder `WC-OE-CUSTOM`) so fulfillment tools like Veeqo can sync them
 
-### Order Processing
-- One-click order creation
-- Automatic order status set to "Processing"
-- Direct link to created order for review
-- Complete integration with WooCommerce order system
-- **PO Number integration**: Display and search functionality in WooCommerce orders
+### Retailers & invoicing
+- Manage retailers (name + email) used for billing, not the drop-ship customer
+- Send invoice PDF to the selected retailer from the order edit page, list row action, or bulk action
+- View Invoice / Download Invoice PDF
+- Invoices are built **at view/send time** from the live order (edits are reflected)
+- Invoice date is the date the invoice document is generated (not the original order date)
+- Test invoice send from the Order Entry screen
+
+### Packing slips (4×6)
+- View Packing Slip / Download Packing Slip PDF on the order page
+- Sized for standard **4×6 inch** shipping labels
+- Shows ship-to, ship-from (site name + store address), order #, date, PO, items + qty
+- No prices or totals
+
+### Shipping
+- Shipping amount field (required when a retailer is selected)
+- Package weight as **lbs + oz** (combined for rate calculations)
+- Package length / width / height
+- **Get Live Rates** via the [Live Shipping Rates for WooCommerce](../live-shipping-rates-for-woocommerce) plugin (UPS / USPS)
+- Selected live rate fills Shipping Amount and stores carrier/service metadata on the order
+- Shipping is stored as a **Shipping fee** line on the order
+
+### PO numbers
+- Duplicate PO check (case-insensitive; trashed orders ignored)
+- PO shown on the order details page and in the orders list
+- Searchable in WooCommerce admin (legacy CPT + HPOS)
+
+### Tax policy
+- Orders created from this screen **never calculate or charge sales tax**, even if WooCommerce tax settings are enabled
+- Storefront / normal checkout tax behavior is unchanged
 
 ## Installation
 
-1. Upload the plugin files to `/wp-content/plugins/woocommerce-order-entry/`
-2. Activate the plugin through the 'Plugins' menu in WordPress
-3. Navigate to WooCommerce → Order Entry to start creating orders
+1. Upload the plugin to `/wp-content/plugins/woocommerce-order-entry/`
+2. Activate it under **Plugins**
+3. Open **WooCommerce → Order Entry**
 
 ## Requirements
 
-- WordPress 5.0 or higher
-- WooCommerce 3.0 or higher
-- PHP 7.0 or higher
+- WordPress 5.0+
+- WooCommerce 3.0+
+- PHP 7.0+
+- Optional: **Live Shipping Rates for WooCommerce** for live UPS/USPS quotes
+- Dompdf is included under `vendor/` for PDF invoices and packing slips
 
-### PDF Invoice Attachment
-
-The plugin includes a pre-built `vendor/` folder with Dompdf, so PDF invoices work out of the box. No Composer setup is required.
-
-If you prefer to manage dependencies with Composer (e.g. for updates), run:
+If you manage PHP deps with Composer:
 
 ```bash
 cd wp-content/plugins/woocommerce-order-entry
 composer install
 ```
 
-Without the vendor folder, invoices are sent as HTML in the email body (which can still be printed to PDF from your email client).
+Without Dompdf, invoice emails still send HTML (printable from the email client).
 
 ## Usage
 
-### Creating an Order
+### Create an order
 
-1. **Customer Information**
-   - Use the dropdown to select a saved customer, or
-   - Paste customer information in the text area and click "Parse & Fill", or
-   - Manually enter customer details
+1. **Customer** — load a saved customer, paste + Parse & Fill, or type fields manually  
+2. **Products** — search SKU/name or enter custom description lines  
+3. **Retailer** — optional; if selected, shipping amount is required  
+4. **Shipping** — enter amount and package details; optionally Get Live Rates  
+5. **Create Order** — order is created as Processing with no tax  
 
-2. **Product Lines**
-   - Start typing in the SKU field to search for products
-   - Select products from the search results
-   - Adjust quantity and pricing as needed
-   - Add additional product lines using the "Add Product Line" button
+Optional: check **Save this customer for future use?** (or use **Update Selected** / **Delete Selected** on a loaded customer).
 
-3. **Submit Order**
-   - Review all information
-   - Check "Save this customer for future use?" if you want to store customer information
-   - Click "Create Order" to submit
+### Invoices & packing slips
 
-4. **Order Confirmation**
-   - View the success message with order number
-   - Click the order link to review the created order in WooCommerce
+On the WooCommerce order edit screen:
 
-### Country Selection
+- **View Invoice** / **Download PDF**
+- **View Packing Slip** / **Download Packing Slip PDF**
+- **Send Invoice** to the retailer (drop-ship customer does not receive it)
 
-The plugin supports two countries:
-- **United States** (default selection)
-- **Canada**
+Invoices and packing slips always rebuild from the current order data.
 
-The country selection affects:
-- Form labels (State/Province, Zip/Postal Code)
-- Address parsing logic for postal codes
-- Order data stored in WooCommerce
+### Address paste examples
 
-### PO Number Functionality
-
-When a PO number is entered in the order form:
-- **Display**: Appears in the order details page in the WooCommerce admin
-- **Search**: Can be searched from the WooCommerce orders list
-- **Column**: Shows in a dedicated "PO Number" column in the orders list
-- **Storage**: Stored as order metadata for easy retrieval
-
-### Enhanced Customer Text Parsing
-
-The plugin can automatically parse customer information from pasted text. It recognizes:
-- **Names**: First line typically contains the full name
-- **Street Addresses**: Lines containing numbers and street indicators (St., Ave., Rd., etc.)
-- **City/State/Zip**: Format like "City, ST 12345" (US) or "City, ON K1A 0A9" (Canada)
-- **Email addresses**: Valid email format detection
-- **Phone numbers**: Various phone number patterns
-- **Postal codes**: 
-  - US format: 12345 or 12345-6789
-  - Canadian format: K1A 0A9 or K1A0A9
-
-**Example Formats:**
-
-*United States:*
+**United States (with apt):**
 ```
-John Doe
-17700 Main St.
-Kansas City, KS 66219
-john.doe@email.com
-(555) 123-4567
+Delmar smith
+40861 N Lakeshore Blvd
+Apt 101
+Marquette, MI 49855
+Phone: 7344784595
 ```
 
-*Canada:*
+**Canada:**
 ```
 Jane Smith
 123 Maple Street
@@ -126,140 +117,114 @@ jane.smith@email.com
 (416) 555-0123
 ```
 
-### Keyboard Shortcuts
+## Technical details
 
-- Tab through form fields for quick data entry
-- Enter key activates product search
-- Escape key closes search results
+### Database
 
-## Technical Details
+**`{prefix}wc_oe_customers`**
+- Contact/address fields, PO
+- `retailer_id`, `shipping_amount`, `package_weight`, `package_length`, `package_width`, `package_height`
 
-### Database Schema
+**`{prefix}wc_oe_retailers`**
+- `name`, `email`
 
-The plugin creates a custom table `wp_wc_oe_customers` to store saved customer information:
+### Main AJAX actions
 
-```sql
-CREATE TABLE wp_wc_oe_customers (
-    id mediumint(9) NOT NULL AUTO_INCREMENT,
-    name varchar(255) NOT NULL,
-    email varchar(255) NOT NULL,
-    phone varchar(50),
-    address_1 varchar(255),
-    address_2 varchar(255),
-    city varchar(100),
-    state varchar(100),
-    postcode varchar(20),
-    country varchar(5) DEFAULT 'US',
-    po_number varchar(100),
-    created_at datetime DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id)
-);
-```
+| Action | Purpose |
+|--------|---------|
+| `wc_oe_search_products` | Product search |
+| `wc_oe_save_customer` | Create or update saved customer |
+| `wc_oe_load_customer` | Load customer (+ shipping prefs) |
+| `wc_oe_delete_customer` | Delete saved customer |
+| `wc_oe_parse_customer` | Parse pasted address |
+| `wc_oe_check_po_duplicate` | PO uniqueness check |
+| `wc_oe_get_live_rates` | Live shipping quotes |
+| `wc_oe_create_order` | Create WooCommerce order |
+| `wc_oe_save_retailer` / `wc_oe_delete_retailer` | Retailer CRUD |
+| `wc_oe_send_invoice` / `wc_oe_send_test_invoice` | Send invoice email |
 
-### AJAX Endpoints
+### Notable order meta
 
-- `wc_oe_search_products` - Product search functionality
-- `wc_oe_save_customer` - Save customer to database
-- `wc_oe_load_customer` - Load saved customer data
-- `wc_oe_parse_customer` - Parse customer information from text
-- `wc_oe_create_order` - Create WooCommerce order
+| Key | Meaning |
+|-----|---------|
+| `_po_number` / `PO Number` | Purchase order |
+| `_shipping_charge` | Billed shipping amount |
+| `_wc_oe_retailer_id` | Assigned retailer |
+| `_wc_oe_shipping_carrier` / `_wc_oe_shipping_service` | Live rate used |
+| `_wc_oe_shipping_quote_amount` | Live quote amount |
+| `_wc_oe_package_*` | Package weight/dims |
+| `_wc_oe_no_tax` | Order Entry tax-free flag |
+| `_wc_oe_invoice_sent_at` | Last invoice email time |
 
-### WooCommerce Integration
-
-The plugin extends WooCommerce functionality by:
-- Adding PO number display in order details
-- Including PO number in order search functionality
-- Adding PO number column to orders list
-- Storing PO number as searchable order metadata
-- Supporting US and Canadian address formats
-
-### File Structure
+### File structure
 
 ```
 woocommerce-order-entry/
-├── woocommerce-order-entry.php (Main plugin file)
-├── templates/
-│   └── admin-page.php (Admin interface template)
+├── woocommerce-order-entry.php
+├── templates/admin-page.php
 ├── assets/
-│   ├── admin.css (Styling)
-│   └── admin.js (JavaScript functionality)
+│   ├── admin.css
+│   ├── admin.js
+│   └── order-edit.js
+├── vendor/                 (Dompdf + deps)
+├── composer.json
 └── README.md
 ```
 
-## Security Features
+## Security
 
-- Nonce verification for all AJAX requests
-- Data sanitization and validation
-- Capability checks for admin access
-- SQL injection prevention with prepared statements
+- Nonce checks on AJAX and admin actions
+- Capability checks (`manage_woocommerce` where appropriate)
+- Sanitized / prepared database access
+- Invoice emails go to retailers only (not the drop-ship customer)
 
-## Customization
+## Version history
 
-### Extending Customer Parsing
+### 1.5.8
+- Removed the `init` hook entirely so scanners no longer flag DB work on every page load
+- Hooks register on `plugins_loaded`; schema upgrades stay on `admin_init` / activation only
 
-The customer parsing logic can be enhanced by modifying the `ajax_parse_customer()` method. Current implementation includes enhanced patterns for:
-- Name extraction from first line
-- Street address detection with number patterns
-- City/State/Zip parsing with regex for both US and Canadian formats
-- Email and phone detection
-- Automatic country detection based on postal code format
-- Sequential field assignment
+### 1.5.7
+- Schema upgrades no longer run `dbDelta` on every `init` / page load
+- Dropped unused Dompdf DejaVu fonts; PDFs use built-in Helvetica (smaller plugin)
 
-### Adding Custom Fields
+### 1.5.6
+- Invoice HTML/PDF shows **Invoice Date** = date the invoice is generated
 
-To add custom fields to the customer form:
+### 1.5.5
+- Address parser: secondary lines (`Apt` / `Suite` / etc.) → Additional Address Line
+- Phone parsing: strip `Phone:`-style labels; store digits only
 
-1. Update the database schema in `create_customers_table()`
-2. Add form fields to `templates/admin-page.php`
-3. Update the save/load customer AJAX handlers
-4. Modify the JavaScript to handle new fields
+### 1.5.3 – 1.5.4
+- Hard no-tax policy for Order Entry (retail) orders
+- Tax kill-switch during create + `_wc_oe_no_tax` safety net on recalculate
+- Puerto Rico (`PR`) in state dropdown and parser map
 
-### Styling Customization
+### 1.5.1 – 1.5.2
+- Invoices always rebuilt at view/send from live order data
+- Fixed order total math when tax was incorrectly baked into totals
+- Shipping fee naming and invoice totals consistency
 
-The plugin includes responsive CSS that can be customized by:
-- Modifying `assets/admin.css`
-- Adding custom CSS through WordPress admin
-- Using theme customizations
+### 1.4.x – 1.5.0
+- Live shipping rates integration (lbs+oz package weight)
+- Packing slip view/download (4×6 label size)
+- Saved customer edit/delete; shipping prefs on save/load
+- Ship-from uses site name (not dealer name)
 
-## Version History
+### 1.3.x – 1.4.0
+- Retailer shipping amount required when retailer selected
+- PO duplicate validation (HPOS-safe)
+- Custom lines as product items for Veeqo
+- Invoice send from order page / list / bulk
 
-### Version 1.1.3 (2025-07-28)
-- **Added Country Selection**:
-  - Country dropdown with United States and Canada options
-  - United States set as default selection
-  - Updated form labels (State/Province, Zip/Postal Code)
-  - Enhanced parsing logic to detect Canadian postal codes
-  - Automatic country detection in address parsing
+### 1.1.x – 1.2.x
+- US/Canada country support
+- PO display, search, and list column
+- Improved address parsing and UI polish
 
-### Version 1.1.2 (2025-07-28)
-- **Enhanced PO Number Integration**:
-  - PO number now displays in WooCommerce order details page
-  - Added PO number column to WooCommerce orders list
-  - Made PO number searchable in WooCommerce order search
-  - Improved order metadata storage for better integration
-
-### Version 1.1.1 (2025-07-25)
-- Fixed checkbox styling to be appropriately sized
-- Updated text to "Save this customer for future use?" (added question mark)
-- Improved checkbox alignment and visual presentation
-
-### Version 1.1.0 (2025-07-25)
-- Enhanced address parsing for formatted customer information
-- Improved regex patterns for city/state/zip detection
-- Better street address recognition
-- Updated plugin naming and directory structure
-
-### Version 1.0.0
-- Initial release
-- Customer management functionality
-- Product search and selection
-- Order creation with WooCommerce integration
-- Responsive admin interface
-
-## Support
-
-For support and feature requests, please visit the plugin repository or contact the development team.
+### 1.0.0
+- Initial release: customer form, product search, order create
 
 ## License
 
-This plugin is licensed under GPL v2 or later.
+GPL v2 or later.

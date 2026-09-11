@@ -183,13 +183,11 @@ if (! isset($wc_states_ca) || ! is_array($wc_states_ca)) {
             </div>
         </div>
         
-        <!-- Tax -->
+        <!-- Tax: Order Entry orders never apply sales tax (line items/fees marked non-taxable). -->
         <div class="wc-oe-section">
-            <div class="wc-oe-row wc-oe-checkbox-row">
-                <label class="wc-oe-checkbox-label">
-                    <input type="checkbox" id="apply-tax" class="wc-oe-checkbox"> <?php echo esc_html__('Add state sales tax (per WooCommerce tax settings)', 'wc-order-entry'); ?>
-                </label>
-            </div>
+            <p class="wc-oe-description" style="margin:0;">
+                <?php echo esc_html__('Sales tax is not calculated on orders created from this screen (even if WooCommerce tax settings are enabled). Other checkout paths are unchanged.', 'wc-order-entry'); ?>
+            </p>
         </div>
         
         <!-- Shipping Charges -->
@@ -202,8 +200,11 @@ if (! isset($wc_states_ca) || ! is_array($wc_states_ca)) {
                     <input type="number" id="shipping-amount" step="0.01" min="0" value="0" placeholder="0.00">
                 </div>
                 <div class="wc-oe-field">
-                    <label for="pkg-weight"><?php echo esc_html__('Package Weight (lbs)', 'wc-order-entry'); ?></label>
-                    <input type="number" id="pkg-weight" step="0.01" min="0" placeholder="e.g. 2.5">
+                    <label for="pkg-weight-lbs"><?php echo esc_html__('Package Weight (lbs + oz)', 'wc-order-entry'); ?></label>
+                    <div class="wc-oe-weight-split">
+                        <input type="number" id="pkg-weight-lbs" step="1" min="0" placeholder="<?php echo esc_attr__('lbs', 'wc-order-entry'); ?>">
+                        <input type="number" id="pkg-weight-oz" step="1" min="0" max="15" placeholder="<?php echo esc_attr__('oz (0-15)', 'wc-order-entry'); ?>">
+                    </div>
                 </div>
                 <div class="wc-oe-field">
                     <label for="pkg-length"><?php echo esc_html__('Package Length (in)', 'wc-order-entry'); ?></label>

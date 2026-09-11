@@ -3,7 +3,7 @@
  * Plugin Name: WooCommerce Order Entry
  * Plugin URI: https://github.com/xboxhacker/woocommerce-order-entry
  * Description: A plugin to manually create WooCommerce orders with customer information and product selection.
- * Version: 1.4.5
+ * Version: 1.5.8
  * Author: xboxhacker
  * License: GPL v2 or later
  * Text Domain: wc-order-entry
@@ -21,17 +21,26 @@ if (!defined('ABSPATH')) {
 // Define plugin constants
 define('WC_OE_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('WC_OE_PLUGIN_PATH', plugin_dir_path(__FILE__));
-define('WC_OE_VERSION', '1.4.5');
+define('WC_OE_VERSION', '1.5.8');
+define('WC_OE_DB_VERSION', '2');
 
 class WC_Order_Entry {
+
+    /**
+     * Re-entry guard so the no-tax recalculation does not loop.
+     *
+     * @var bool
+     */
+    private $enforcing_no_tax = false;
     
     public function __construct() {
-        add_action('init', array($this, 'init'));
         register_activation_hook(__FILE__, array($this, 'activate'));
         register_deactivation_hook(__FILE__, array($this, 'deactivate'));
+        add_action('plugins_loaded', array($this, 'register_hooks'), 20);
+        add_action('admin_init', array($this, 'maybe_upgrade_schema'));
     }
     
-    public function init() {
+    public function register_hooks() {
         // Check if WooCommerce is active
         if (!class_exists('WooCommerce')) {
             add_action('admin_notices', array($this, 'woocommerce_missing_notice'));
@@ -75,20 +84,58 @@ class WC_Order_Entry {
         add_action('admin_action_wc_oe_view_packing_slip', array($this, 'handle_view_packing_slip'));
         add_action('admin_action_wc_oe_download_packing_slip', array($this, 'handle_download_packing_slip'));
         add_action('admin_notices', array($this, 'orders_list_invoice_notices'));
-        
-        // Create database tables
-        $this->create_customers_table();
-        $this->create_retailers_table();
+
+        // Safety net: keep plugin-created (retail) orders tax-free even on later recalculations.
+        add_action('woocommerce_order_after_calculate_totals', array($this, 'enforce_no_tax_on_calculate'), 999, 2);
     }
     
     public function activate() {
-        // Activation tasks
-        $this->create_customers_table();
-        $this->create_retailers_table();
+        $this->maybe_upgrade_schema(true);
     }
-    
+
     public function deactivate() {
         // Deactivation tasks
+    }
+
+    /**
+     * Create/upgrade plugin tables when needed. Avoids dbDelta on frontend init.
+     *
+     * @param bool $force Run even outside admin (activation).
+     */
+    public function maybe_upgrade_schema($force = false) {
+        if (!$force && !is_admin()) {
+            return;
+        }
+        $installed = get_option('wc_oe_db_version', '');
+        if ($installed === WC_OE_DB_VERSION) {
+            return;
+        }
+        $this->create_customers_table();
+        $this->create_retailers_table();
+        $this->prune_unused_dompdf_fonts();
+        update_option('wc_oe_db_version', WC_OE_DB_VERSION, true);
+    }
+
+    /**
+     * Remove unused DejaVu font files shipped with Dompdf (core PDF fonts are enough).
+     */
+    private function prune_unused_dompdf_fonts() {
+        $font_dir = WC_OE_PLUGIN_PATH . 'vendor/dompdf/dompdf/lib/fonts/';
+        if (!is_dir($font_dir)) {
+            return;
+        }
+        $patterns = array('DejaVu*.ttf', 'DejaVu*.ufm', 'DejaVu*.ufm.json');
+        foreach ($patterns as $pattern) {
+            $files = glob($font_dir . $pattern);
+            if (!is_array($files)) {
+                continue;
+            }
+            foreach ($files as $file) {
+                if (is_file($file)) {
+                    @unlink($file);
+                }
+            }
+        }
     }
     
     public function woocommerce_missing_notice() {
@@ -168,6 +215,7 @@ class WC_Order_Entry {
         $product->set_catalog_visibility('hidden');
         $product->set_virtual(true);
         $product->set_sold_individually(false);
+        $product->set_tax_status('none'); // Order Entry orders are never taxed.
         $product->save();
         return $product;
     }
@@ -227,6 +275,10 @@ class WC_Order_Entry {
         $retailers = $wpdb->get_results("SELECT * FROM $retailers_table ORDER BY name ASC");
         
         $wc_states_us = is_array(WC()->countries->get_states('US')) ? WC()->countries->get_states('US') : array();
+        // Ensure Puerto Rico is always available as a US state/province option.
+        if (!isset($wc_states_us['PR'])) {
+            $wc_states_us['PR'] = __('Puerto Rico', 'wc-order-entry');
+        }
         $wc_states_ca = is_array(WC()->countries->get_states('CA')) ? WC()->countries->get_states('CA') : array();
         
         include WC_OE_PLUGIN_PATH . 'templates/admin-page.php';
@@ -238,21 +290,43 @@ class WC_Order_Entry {
         $shipping_charge = $order->get_meta('_shipping_charge');
         $shipping_carrier = $order->get_meta('_wc_oe_shipping_carrier');
         $shipping_service = $order->get_meta('_wc_oe_shipping_service');
-        $shipping_quote_amount = $order->get_meta('_wc_oe_shipping_quote_amount');
-        if (!empty($po_number) || !empty($shipping_charge) || !empty($shipping_carrier) || !empty($shipping_service)) {
+        $shipping_quote_amount_raw = $order->get_meta('_wc_oe_shipping_quote_amount');
+        $shipping_quote_amount = ($shipping_quote_amount_raw !== '' && $shipping_quote_amount_raw !== null) ? floatval($shipping_quote_amount_raw) : 0.0;
+        $charge_amount = ($shipping_charge !== '' && $shipping_charge !== null) ? floatval($shipping_charge) : 0.0;
+        if ($charge_amount <= 0) {
+            foreach ($order->get_items('fee') as $fee) {
+                if ($this->is_invoice_shipping_fee_item($fee)) {
+                    $charge_amount = (float) $fee->get_total();
+                    break;
+                }
+            }
+        }
+        // Only show a separate "live quote" price when it differs from what was billed (avoid looking like double shipping).
+        $live_quote_differs_from_charge = (
+            $shipping_quote_amount > 0
+            && $charge_amount > 0
+            && abs($shipping_quote_amount - $charge_amount) >= 0.02
+        );
+        $tax_total = floatval($order->get_total_tax());
+
+        if (!empty($po_number) || $charge_amount > 0 || !empty($shipping_carrier) || !empty($shipping_service) || $shipping_quote_amount > 0 || $tax_total > 0) {
             echo '<div class="address">';
             if (!empty($po_number)) {
                 echo '<p><strong>' . __('PO Number:', 'wc-order-entry') . '</strong> ' . esc_html($po_number) . '</p>';
             }
-            if (!empty($shipping_charge)) {
-                echo '<p><strong>' . __('Shipping Charge:', 'wc-order-entry') . '</strong> ' . wc_price($shipping_charge) . '</p>';
+            if ($charge_amount > 0) {
+                echo '<p><strong>' . __('Shipping on order:', 'wc-order-entry') . '</strong> ' . wc_price($charge_amount) . '</p>';
             }
             if (!empty($shipping_carrier) || !empty($shipping_service)) {
                 $service_label = trim($shipping_carrier . (!empty($shipping_service) ? ' - ' . $shipping_service : ''));
-                echo '<p><strong>' . __('Live Shipping Service:', 'wc-order-entry') . '</strong> ' . esc_html($service_label) . '</p>';
+                echo '<p><strong>' . __('Live rate used:', 'wc-order-entry') . '</strong> ' . esc_html($service_label) . '</p>';
             }
-            if (!empty($shipping_quote_amount)) {
-                echo '<p><strong>' . __('Live Shipping Quote:', 'wc-order-entry') . '</strong> ' . wc_price(floatval($shipping_quote_amount)) . '</p>';
+            if ($live_quote_differs_from_charge) {
+                echo '<p><strong>' . __('Live quoted amount (carrier):', 'wc-order-entry') . '</strong> ' . wc_price($shipping_quote_amount) . '</p>';
+            }
+            if ($tax_total > 0) {
+                echo '<p><strong>' . __('Tax:', 'wc-order-entry') . '</strong> ' . wc_price($tax_total)
+                    . ' <span class="description">' . esc_html(__('(included in order total—the items/fees breakdown above is before tax)', 'wc-order-entry')) . '</span></p>';
             }
             echo '</div>';
         }
@@ -451,11 +525,7 @@ class WC_Order_Entry {
             exit;
         }
         
-        $invoice_data = $this->build_invoice_data_from_order($order);
-        $tracking = $this->get_order_tracking($order);
-        $po_number = $order->get_meta('_po_number');
-        $total = $invoice_data['total'];
-        $sent = $this->send_invoice_email($retailer->email, $invoice_data, $order_id, $tracking, $po_number, $total);
+        $sent = $this->send_invoice_email($retailer->email, $order_id);
         
         $redirect = $this->get_orders_list_url();
         if ($sent) {
@@ -511,11 +581,7 @@ class WC_Order_Entry {
                 $skipped++;
                 continue;
             }
-            $invoice_data = $this->build_invoice_data_from_order($order);
-            $tracking = $this->get_order_tracking($order);
-            $po_number = $order->get_meta('_po_number');
-            $total = $invoice_data['total'];
-            if ($this->send_invoice_email($retailer->email, $invoice_data, $order_id, $tracking, $po_number, $total)) {
+            if ($this->send_invoice_email($retailer->email, $order_id)) {
                 $sent_count++;
             }
         }
@@ -1014,6 +1080,7 @@ class WC_Order_Entry {
             'south carolina' => 'SC', 'south dakota' => 'SD', 'tennessee' => 'TN', 'texas' => 'TX',
             'utah' => 'UT', 'vermont' => 'VT', 'virginia' => 'VA', 'washington' => 'WA',
             'west virginia' => 'WV', 'wisconsin' => 'WI', 'wyoming' => 'WY',
+            'puerto rico' => 'PR',
         );
         return $map;
     }
@@ -1087,7 +1154,42 @@ class WC_Order_Entry {
         }
         $offset = $ph[0][1];
         $len = strlen($ph[0][0]);
-        return trim(substr($text, $offset, $len));
+        return $this->clean_phone_value(substr($text, $offset, $len));
+    }
+
+    /**
+     * Normalize a phone value: drop labels like "Phone:"/"Tel"/"Mobile" and keep digits only
+     * (a single leading + is preserved for international numbers).
+     *
+     * @param string $value
+     * @return string
+     */
+    private function clean_phone_value($value) {
+        if ($value === null) {
+            return '';
+        }
+        $value = (string) $value;
+        // Remove a leading label such as "Phone:", "Tel.", "Mobile -", "Cell:".
+        $value = preg_replace('/^\s*(?:phone|ph|tel|telephone|mobile|cell(?:\s*phone)?|contact)\b[\s:.\-]*/i', '', $value);
+        $has_plus = (strpos($value, '+') === 0);
+        $digits = preg_replace('/\D+/', '', $value);
+        if ($digits === '') {
+            return '';
+        }
+        return ($has_plus ? '+' : '') . $digits;
+    }
+
+    /**
+     * Whether a line is a secondary address part (apartment, suite, unit, floor, etc.).
+     *
+     * @param string $line
+     * @return bool
+     */
+    private function looks_like_secondary_address_line($line) {
+        return (bool) preg_match(
+            '/^\s*(?:#\s*\w|apt\.?|apartment|ste\.?|suite|unit|bldg\.?|building|fl\.?|floor|rm\.?|room|lot|space|spc\.?|trlr\.?|trailer|dept\.?|department)\b/i',
+            $line
+        );
     }
     
     /**
@@ -1289,9 +1391,10 @@ class WC_Order_Entry {
                 $used[ $index ] = true;
                 continue;
             }
-            if (preg_match('/^(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}$/', preg_replace('/\s+/', ' ', $line)) ||
-                preg_match('/^\d{10}$/', preg_replace('/\D/', '', $line))) {
-                $parsed_data['phone'] = $line;
+            $line_no_label = preg_replace('/^\s*(?:phone|ph|tel|telephone|mobile|cell(?:\s*phone)?|contact)\b[\s:.\-]*/i', '', $line);
+            if (preg_match('/^(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}$/', preg_replace('/\s+/', ' ', $line_no_label)) ||
+                preg_match('/^\d{10}$/', preg_replace('/\D/', '', $line_no_label))) {
+                $parsed_data['phone'] = $this->clean_phone_value($line);
                 $used[ $index ] = true;
                 continue;
             }
@@ -1339,6 +1442,21 @@ class WC_Order_Entry {
                 if (empty($parsed_data['address_1'])) {
                     $parsed_data['address_1'] = $line;
                 } else {
+                    $parsed_data['address_2'] = $line;
+                }
+                $used[ $index ] = true;
+            }
+        }
+        
+        // Secondary address lines: Apt/Suite/Unit/# etc. (goes to Additional Address Line).
+        foreach ($lines as $index => $line) {
+            if (! empty($used[ $index ])) {
+                continue;
+            }
+            if ($this->looks_like_secondary_address_line($line)) {
+                if (empty($parsed_data['address_1'])) {
+                    $parsed_data['address_1'] = $line;
+                } elseif (empty($parsed_data['address_2'])) {
                     $parsed_data['address_2'] = $line;
                 }
                 $used[ $index ] = true;
@@ -1445,7 +1563,16 @@ class WC_Order_Entry {
             array('carrier' => 'USPS', 'number' => '9400111899562537864123'),
             array('carrier' => 'FedEx', 'number' => '123456789012')
         );
-        $sent = $this->send_invoice_email($email, $invoice_data, 99999, $tracking, 'PO-12345', 88.47, true);
+        $sent = $this->send_invoice_email(
+            $email,
+            0,
+            true,
+            array(
+                'invoice_data' => $invoice_data,
+                'tracking' => $tracking,
+                'po_number' => 'PO-12345',
+            )
+        );
         
         if ($sent) {
             wp_send_json_success(sprintf(__('Test invoice sent to %s. Check your inbox.', 'wc-order-entry'), $email));
@@ -1477,11 +1604,7 @@ class WC_Order_Entry {
             wp_send_json_error(__('Retailer not found.', 'wc-order-entry'));
         }
         
-        $invoice_data = $this->build_invoice_data_from_order($order);
-        $tracking = $this->get_order_tracking($order);
-        $po_number = $order->get_meta('_po_number');
-        $total = $invoice_data['total'];
-        $sent = $this->send_invoice_email($retailer->email, $invoice_data, $order_id, $tracking, $po_number, $total);
+        $sent = $this->send_invoice_email($retailer->email, $order_id);
         
         if ($sent) {
             $order = wc_get_order($order_id);
@@ -1506,15 +1629,16 @@ class WC_Order_Entry {
         }
         check_admin_referer('wc_oe_view_invoice_' . $order_id);
         
-        $order = wc_get_order($order_id);
-        if (!$order) {
+        $bundle = $this->build_invoice_runtime_bundle($order_id);
+        if (!$bundle) {
             wp_die(__('Order not found.', 'wc-order-entry'));
         }
-        
-        $invoice_data = $this->build_invoice_data_from_order($order);
-        $tracking = $this->get_order_tracking($order);
-        $html = $this->generate_invoice_html($invoice_data, $order_id, $tracking);
-        $full_html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' . esc_attr(sprintf(__('Invoice #%d', 'wc-order-entry'), $order_id)) . '</title></head><body>' . $html . '</body></html>';
+        $invoice_data = $bundle['invoice_data'];
+        $tracking = $bundle['tracking'];
+        $doc_order_id = $bundle['order']->get_id();
+        $html = $this->generate_invoice_html($invoice_data, $doc_order_id, $tracking);
+        $title = sprintf(__('Invoice #%s', 'wc-order-entry'), $invoice_data['order_number']);
+        $full_html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' . esc_attr($title) . '</title></head><body>' . $html . '</body></html>';
         echo $full_html;
         exit;
     }
@@ -1529,14 +1653,14 @@ class WC_Order_Entry {
         }
         check_admin_referer('wc_oe_download_invoice_' . $order_id);
         
-        $order = wc_get_order($order_id);
-        if (!$order) {
+        $bundle = $this->build_invoice_runtime_bundle($order_id);
+        if (!$bundle) {
             wp_die(__('Order not found.', 'wc-order-entry'));
         }
-        
-        $invoice_data = $this->build_invoice_data_from_order($order);
-        $tracking = $this->get_order_tracking($order);
-        $pdf_path = $this->generate_invoice_pdf($invoice_data, $order_id, $tracking);
+        $invoice_data = $bundle['invoice_data'];
+        $tracking = $bundle['tracking'];
+        $doc_order_id = $bundle['order']->get_id();
+        $pdf_path = $this->generate_invoice_pdf($invoice_data, $doc_order_id, $tracking);
         
         if (!$pdf_path || !file_exists($pdf_path)) {
             wp_die(__('PDF generation failed. Dompdf may not be installed.', 'wc-order-entry'));
@@ -1641,33 +1765,107 @@ class WC_Order_Entry {
     }
     
     /**
-     * Send invoice email to recipient. Includes body message, and PDF attachment if Dompdf is available.
+     * Reload order from the database so invoices always reflect the latest saved edits.
+     * Invoices/PDFs are never generated or stored at order creation time.
+     *
+     * @param int $order_id
+     * @return WC_Order|false
      */
-    private function send_invoice_email($to_email, $invoice_data, $order_id, $tracking, $po_number, $total, $is_test = false) {
+    private function get_order_for_invoice_document($order_id) {
+        $order_id = absint($order_id);
+        if ($order_id <= 0) {
+            return false;
+        }
+        clean_post_cache($order_id);
+        $order = wc_get_order($order_id);
+        return ($order && is_a($order, 'WC_Order')) ? $order : false;
+    }
+
+    /**
+     * PO number from current order meta (supports legacy display key).
+     *
+     * @param WC_Order $order
+     * @return string
+     */
+    private function get_invoice_po_number($order) {
+        $po = $order->get_meta('_po_number');
+        if ($po === '' || $po === null) {
+            $po = $order->get_meta('PO Number');
+        }
+        return is_string($po) ? trim($po) : '';
+    }
+
+    /**
+     * Build invoice HTML/PDF payload from the live order (view, download, send).
+     *
+     * @param int $order_id
+     * @return array{order:WC_Order,invoice_data:array,tracking:array,po_number:string}|false
+     */
+    private function build_invoice_runtime_bundle($order_id) {
+        $order = $this->get_order_for_invoice_document($order_id);
+        if (!$order) {
+            return false;
+        }
+        return array(
+            'order' => $order,
+            'invoice_data' => $this->build_invoice_data_from_order($order),
+            'tracking' => $this->get_order_tracking($order),
+            'po_number' => $this->get_invoice_po_number($order),
+        );
+    }
+
+    /**
+     * Send invoice email. For real orders, HTML + PDF are generated at send time from the live order.
+     *
+     * @param string $to_email
+     * @param int    $order_id Order ID, or 0 for test payload.
+     * @param bool   $is_test
+     * @param array|null $test_payload Keys: invoice_data, tracking, po_number.
+     * @return bool
+     */
+    private function send_invoice_email($to_email, $order_id, $is_test = false, $test_payload = null) {
+        if ($is_test && is_array($test_payload) && !empty($test_payload['invoice_data'])) {
+            $invoice_data = $test_payload['invoice_data'];
+            $tracking = isset($test_payload['tracking']) && is_array($test_payload['tracking']) ? $test_payload['tracking'] : array();
+            $po_number = isset($test_payload['po_number']) ? (string) $test_payload['po_number'] : '';
+            $doc_order_id = 0;
+        } else {
+            $bundle = $this->build_invoice_runtime_bundle($order_id);
+            if (!$bundle) {
+                return false;
+            }
+            $invoice_data = $bundle['invoice_data'];
+            $tracking = $bundle['tracking'];
+            $po_number = $bundle['po_number'];
+            $doc_order_id = $bundle['order']->get_id();
+        }
+
+        $total = isset($invoice_data['total']) ? floatval($invoice_data['total']) : 0;
         $currency = get_woocommerce_currency_symbol();
         $po_display = !empty($po_number) ? $po_number : __('N/A', 'wc-order-entry');
         $total_formatted = $currency . number_format($total, 2);
-        
+        $order_label = !empty($invoice_data['order_number']) ? $invoice_data['order_number'] : (string) $doc_order_id;
+
         $body_message = sprintf(
             __("Thank you for your order! Please find attached your invoice for PO#%s in the amount of %s.\n\nIf you have any questions about this invoice, please don't hesitate to reach out.", 'wc-order-entry'),
             $po_display,
             $total_formatted
         );
-        
-        $subject = sprintf(__('Invoice #%d - PO# %s', 'wc-order-entry'), $order_id, $po_display);
+
+        $subject = sprintf(__('Invoice #%s - PO# %s', 'wc-order-entry'), $order_label, $po_display);
         if ($is_test) {
             $subject .= ' (' . __('Test', 'wc-order-entry') . ')';
         }
-        
-        $html = $this->generate_invoice_html($invoice_data, $order_id, $tracking);
+
+        $html = $this->generate_invoice_html($invoice_data, $doc_order_id, $tracking);
         $full_html = '<p style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6;">' . nl2br(esc_html($body_message)) . '</p><hr style="margin: 20px 0;"><p style="font-size: 12px; color: #666;">' . __('Invoice details below:', 'wc-order-entry') . '</p>' . $html;
-        
+
         $attachments = array();
-        $pdf_path = $this->generate_invoice_pdf($invoice_data, $order_id, $tracking);
+        $pdf_path = $this->generate_invoice_pdf($invoice_data, $doc_order_id, $tracking);
         if ($pdf_path) {
             $attachments[] = $pdf_path;
         }
-        
+
         $headers = array('Content-Type: text/html; charset=UTF-8');
         if (!$is_test) {
             $admin_email = get_option('admin_email');
@@ -1676,19 +1874,19 @@ class WC_Order_Entry {
             }
         }
         $sent = wp_mail($to_email, $subject, $full_html, $headers, $attachments);
-        
+
         if (!empty($pdf_path) && file_exists($pdf_path)) {
             @unlink($pdf_path);
         }
-        
-        if ($sent && !$is_test) {
-            $order = wc_get_order($order_id);
+
+        if ($sent && !$is_test && $doc_order_id > 0) {
+            $order = $this->get_order_for_invoice_document($doc_order_id);
             if ($order) {
                 $order->update_meta_data('_wc_oe_invoice_sent_at', current_time('mysql'));
                 $order->save();
             }
         }
-        
+
         return $sent;
     }
     
@@ -1710,7 +1908,11 @@ class WC_Order_Entry {
         $full_html = '<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body>' . $html . '</body></html>';
         
         try {
-            $dompdf = new \Dompdf\Dompdf();
+            $options = new \Dompdf\Options();
+            $options->set('isHtml5ParserEnabled', true);
+            $options->set('isRemoteEnabled', false);
+            $options->set('defaultFont', 'Helvetica');
+            $dompdf = new \Dompdf\Dompdf($options);
             $dompdf->loadHtml($full_html);
             $dompdf->setPaper('A4', 'portrait');
             $dompdf->render();
@@ -1829,7 +2031,7 @@ class WC_Order_Entry {
         ob_start();
         ?>
         <style type="text/css">
-            .wc-oe-packing-slip-label { width: 4in; max-width: 4in; box-sizing: border-box; margin: 0 auto; padding: 0.1in 0.12in; font-family: DejaVu Sans, Helvetica, Arial, sans-serif; font-size: 7.5pt; line-height: 1.15; color: #000; }
+            .wc-oe-packing-slip-label { width: 4in; max-width: 4in; box-sizing: border-box; margin: 0 auto; padding: 0.1in 0.12in; font-family: Helvetica, Arial, sans-serif; font-size: 7.5pt; line-height: 1.15; color: #000; }
             .wc-oe-packing-slip-label .wc-oe-ps-title { font-size: 11pt; font-weight: 700; margin: 0 0 0.06in; letter-spacing: 0.02em; }
             .wc-oe-packing-slip-label .wc-oe-ps-meta-row { width: 100%; border-collapse: collapse; margin: 0 0 0.06in; font-size: 6.5pt; }
             .wc-oe-packing-slip-label .wc-oe-ps-meta-row td { vertical-align: top; padding: 0; }
@@ -1923,7 +2125,7 @@ class WC_Order_Entry {
             $options = new \Dompdf\Options();
             $options->set('isHtml5ParserEnabled', true);
             $options->set('isRemoteEnabled', false);
-            $options->set('defaultFont', 'DejaVu Sans');
+            $options->set('defaultFont', 'Helvetica');
 
             $dompdf = new \Dompdf\Dompdf($options);
             $dompdf->loadHtml($full_html);
@@ -1995,51 +2197,74 @@ class WC_Order_Entry {
             return false;
         }
         $name = $item->get_name();
-        if ($name === 'Shipping') {
-            return true;
-        }
-        return $name === __('Shipping', 'wc-order-entry');
+        // Legacy fee title + current translated title.
+        $labels = array(
+            'Shipping',
+            'Shipping fee',
+            __('Shipping', 'wc-order-entry'),
+            __('Shipping fee', 'wc-order-entry'),
+        );
+        return in_array($name, $labels, true);
     }
 
     /**
-     * Build invoice data array from a WooCommerce order.
+     * Build invoice data array from the current WooCommerce order (live line items, not snapshots).
      */
     private function build_invoice_data_from_order($order) {
-        $customer = array(
-            'name' => trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name()) ?: $order->get_formatted_billing_full_name(),
-            'email' => $order->get_billing_email(),
-            'phone' => $order->get_billing_phone(),
-            'address_1' => $order->get_billing_address_1(),
-            'address_2' => $order->get_billing_address_2(),
-            'city' => $order->get_billing_city(),
-            'state' => $order->get_billing_state(),
-            'postcode' => $order->get_billing_postcode(),
-            'country' => $order->get_billing_country(),
-            'po_number' => $order->get_meta('_po_number')
-        );
-        
-        $products = array();
-        $subtotal = 0;
-        $shipping_amount = floatval($order->get_meta('_shipping_charge'));
-
-        // Must include 'fee' — default get_items() is line_item only, so shipping fees were skipped.
-        $line_and_fees = $order->get_items(array('line_item', 'fee'));
-        foreach ($line_and_fees as $item) {
-            if ($item->is_type('line_item')) {
-                $name = $item->get_name();
-                $qty = $item->get_quantity();
-                $total = (float) $item->get_total();
-                $price = $qty > 0 ? $total / $qty : 0;
-                $subtotal += $total;
-                $products[] = array('name' => $name, 'quantity' => $qty, 'price' => $price, 'total' => $total);
-                continue;
-            }
-            if ($item->is_type('fee') && $this->is_invoice_shipping_fee_item($item)) {
-                $shipping_amount = (float) $item->get_total();
-            }
+        $ship_name = trim($order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name());
+        if ($ship_name === '') {
+            $ship_name = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
+        }
+        if ($ship_name === '') {
+            $ship_name = $order->get_formatted_shipping_full_name() ?: $order->get_formatted_billing_full_name();
         }
 
-        // Native WC shipping lines (orders not using the plugin fee).
+        $customer = array(
+            'name' => $ship_name,
+            'email' => $order->get_billing_email(),
+            'phone' => $order->get_billing_phone(),
+            'address_1' => $order->get_shipping_address_1() ?: $order->get_billing_address_1(),
+            'address_2' => $order->get_shipping_address_2() ?: $order->get_billing_address_2(),
+            'city' => $order->get_shipping_city() ?: $order->get_billing_city(),
+            'state' => $order->get_shipping_state() ?: $order->get_billing_state(),
+            'postcode' => $order->get_shipping_postcode() ?: $order->get_billing_postcode(),
+            'country' => $order->get_shipping_country() ?: $order->get_billing_country(),
+            'po_number' => $this->get_invoice_po_number($order),
+        );
+
+        $products = array();
+        $subtotal = 0;
+        $shipping_amount = 0;
+
+        foreach ($order->get_items('line_item') as $item) {
+            $name = $item->get_name();
+            $qty = $item->get_quantity();
+            $total = (float) $item->get_total();
+            $price = $qty > 0 ? $total / $qty : 0;
+            $subtotal += $total;
+            $products[] = array(
+                'name' => $name,
+                'quantity' => $qty,
+                'price' => $price,
+                'total' => $total,
+            );
+        }
+
+        foreach ($order->get_items('fee') as $fee) {
+            $fee_total = (float) $fee->get_total();
+            if ($this->is_invoice_shipping_fee_item($fee)) {
+                $shipping_amount += $fee_total;
+                continue;
+            }
+            $subtotal += $fee_total;
+            $products[] = array(
+                'name' => $fee->get_name(),
+                'quantity' => 1,
+                'price' => $fee_total,
+                'total' => $fee_total,
+            );
+        }
+
         if ($shipping_amount <= 0) {
             $wc_ship = (float) $order->get_shipping_total();
             if ($wc_ship > 0) {
@@ -2047,12 +2272,21 @@ class WC_Order_Entry {
             }
         }
 
+        $tax_amount = (float) $order->get_total_tax();
+        // Total is derived from the lines shown on the invoice so the document always adds up,
+        // even if a stored order total is stale/incorrect.
+        $computed_total = $subtotal + $shipping_amount + $tax_amount;
+        $stored_total = (float) $order->get_total();
+        $total = (abs($computed_total - $stored_total) < 0.01) ? $stored_total : $computed_total;
+
         return array(
             'customer' => $customer,
             'products' => $products,
             'shipping_amount' => $shipping_amount,
             'subtotal' => $subtotal,
-            'total' => $order->get_total()
+            'tax_amount' => $tax_amount,
+            'total' => $total,
+            'order_number' => $order->get_order_number(),
         );
     }
     
@@ -2137,6 +2371,88 @@ class WC_Order_Entry {
         }
         return intval($order_ids[0]);
     }
+
+    /**
+     * Order Entry orders never include sales tax: mark rows non-taxable, recalculate, strip tax lines.
+     *
+     * @param WC_Order $order
+     */
+    /**
+     * Turn WooCommerce tax calculation completely off for the current request.
+     * Used while creating Order Entry (retail) orders so tax is never calculated.
+     */
+    private function begin_tax_free_context() {
+        add_filter('wc_tax_enabled', '__return_false', PHP_INT_MAX);
+        add_filter('woocommerce_calc_taxes', '__return_false', PHP_INT_MAX);
+        add_filter('woocommerce_order_item_get_tax_class', array($this, 'force_tax_free_tax_class'), PHP_INT_MAX);
+    }
+
+    /**
+     * Restore WooCommerce tax calculation after Order Entry order creation.
+     */
+    private function end_tax_free_context() {
+        remove_filter('wc_tax_enabled', '__return_false', PHP_INT_MAX);
+        remove_filter('woocommerce_calc_taxes', '__return_false', PHP_INT_MAX);
+        remove_filter('woocommerce_order_item_get_tax_class', array($this, 'force_tax_free_tax_class'), PHP_INT_MAX);
+    }
+
+    /**
+     * Force an empty (standard/zero) tax class while the tax-free context is active.
+     *
+     * @param string $tax_class
+     * @return string
+     */
+    public function force_tax_free_tax_class($tax_class) {
+        return '';
+    }
+
+    /**
+     * Safety net: whenever totals are calculated for a plugin-created (retail) order,
+     * force taxes to zero — even on later admin edits/recalculations.
+     *
+     * @param bool     $and_taxes
+     * @param WC_Order $order
+     */
+    public function enforce_no_tax_on_calculate($and_taxes, $order) {
+        if ($this->enforcing_no_tax) {
+            return;
+        }
+        if (!$order || !is_a($order, 'WC_Order')) {
+            return;
+        }
+        if ($order->get_meta('_wc_oe_no_tax') !== 'yes') {
+            return;
+        }
+        $tax_total = (float) $order->get_total_tax();
+        $has_tax_items = count($order->get_items('tax')) > 0;
+        if ($tax_total <= 0.000001 && !$has_tax_items) {
+            return;
+        }
+        // Recompute without tax and persist the corrected total (guarded against recursion).
+        $this->enforcing_no_tax = true;
+        $this->finalize_order_entry_without_tax($order);
+        $this->enforcing_no_tax = false;
+    }
+
+    private function finalize_order_entry_without_tax($order) {
+        if (!$order || !is_a($order, 'WC_Order')) {
+            return;
+        }
+        // Strip any tax lines and zero per-item taxes BEFORE totals so tax is never baked in.
+        $order->remove_order_items('tax');
+        foreach ($order->get_items(array('line_item', 'fee', 'shipping')) as $item) {
+            if (method_exists($item, 'set_tax_status')) {
+                $item->set_tax_status('none');
+            }
+            if (method_exists($item, 'set_taxes')) {
+                $item->set_taxes(false);
+            }
+        }
+        $order->set_cart_tax(0);
+        $order->set_shipping_tax(0);
+        // Recalculate the order total WITHOUT recomputing taxes (false = do not add taxes back).
+        $order->calculate_totals(false);
+    }
     
     /**
      * AJAX: check PO duplicate before submit (optional UX).
@@ -2208,6 +2524,10 @@ class WC_Order_Entry {
         $shipping_amount = ($shipping_raw !== '' && trim($shipping_raw) !== '') ? floatval($shipping_raw) : 0;
         
         try {
+            // Hard guarantee: no sales tax is calculated for Order Entry (retail) orders,
+            // regardless of WooCommerce tax settings. Active for this creation request only.
+            $this->begin_tax_free_context();
+
             // Create new WooCommerce order
             $order = wc_create_order();
             
@@ -2273,7 +2593,7 @@ class WC_Order_Entry {
             // Add shipping as a fee (billing to retailer)
             if ($shipping_amount > 0) {
                 $fee = new WC_Order_Item_Fee();
-                $fee->set_name(__('Shipping', 'wc-order-entry'));
+                $fee->set_name(__('Shipping fee', 'wc-order-entry'));
                 $fee->set_amount($shipping_amount);
                 $fee->set_total($shipping_amount);
                 $order->add_item($fee);
@@ -2305,20 +2625,16 @@ class WC_Order_Entry {
                 $order->add_meta_data('_wc_oe_retailer_id', $retailer_id);
             }
             
-            // Calculate totals (WooCommerce adds state sales tax when configured)
-            $order->calculate_totals();
-            
-            // If tax checkbox was unchecked, remove tax
-            $apply_tax = !empty($_POST['apply_tax']);
-            if (!$apply_tax) {
-                $order->remove_order_items('tax');
-                $order->set_cart_tax(0);
-                $order->set_shipping_tax(0);
-                $order->set_total($order->get_total() - $order->get_total_tax());
-            }
+            // Flag this order so later recalculations (e.g. admin edits) also stay tax-free.
+            $order->update_meta_data('_wc_oe_no_tax', 'yes');
+
+            // Order Entry never applies sales tax (ignore global WC tax rates for these orders).
+            $this->finalize_order_entry_without_tax($order);
             
             $order->set_status('processing');
             $order->save();
+
+            $this->end_tax_free_context();
             
             wp_send_json_success(array(
                 'order_id' => $order->get_id(),
@@ -2326,6 +2642,7 @@ class WC_Order_Entry {
             ));
             
         } catch (Exception $e) {
+            $this->end_tax_free_context();
             wp_send_json_error('Failed to create order: ' . $e->getMessage());
         }
     }
@@ -2340,7 +2657,12 @@ class WC_Order_Entry {
         $products = $data['products'];
         $shipping = $data['shipping_amount'];
         $subtotal = $data['subtotal'];
+        $tax_amount = isset($data['tax_amount']) ? floatval($data['tax_amount']) : 0;
         $total = $data['total'];
+        $order_label = !empty($data['order_number']) ? $data['order_number'] : (string) $order_id;
+        $invoice_date = !empty($data['invoice_date'])
+            ? $data['invoice_date']
+            : date_i18n(get_option('date_format'), current_time('timestamp'));
         
         $currency = get_woocommerce_currency_symbol();
         
@@ -2353,7 +2675,8 @@ class WC_Order_Entry {
             <title>Invoice #<?php echo esc_attr($order_id); ?></title>
             <style>
                 body { font-family: Arial, sans-serif; font-size: 12px; line-height: 1.4; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }
-                h1 { font-size: 18px; margin-bottom: 20px; border-bottom: 2px solid #333; padding-bottom: 10px; }
+                h1 { font-size: 18px; margin-bottom: 6px; }
+                .invoice-date { margin: 0 0 20px; padding-bottom: 10px; border-bottom: 2px solid #333; font-size: 13px; }
                 .section { margin-bottom: 20px; }
                 .section-title { font-weight: bold; font-size: 14px; margin-bottom: 8px; }
                 table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
@@ -2371,7 +2694,8 @@ class WC_Order_Entry {
         </head>
         <body>
             <div style="font-size: 20px; font-weight: bold; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.05em;"><?php echo esc_html(strtoupper(get_bloginfo('name'))); ?></div>
-            <h1><?php echo esc_html__('Invoice', 'wc-order-entry'); ?> #<?php echo esc_html($order_id); ?></h1>
+            <h1><?php echo esc_html__('Invoice', 'wc-order-entry'); ?> #<?php echo esc_html($order_label); ?></h1>
+            <p class="invoice-date"><strong><?php echo esc_html__('Invoice Date:', 'wc-order-entry'); ?></strong> <?php echo esc_html($invoice_date); ?></p>
             
             <div class="section">
                 <div class="section-title"><?php echo esc_html__('Drop-Ship Customer (Ship To)', 'wc-order-entry'); ?></div>
@@ -2441,9 +2765,15 @@ class WC_Order_Entry {
                         <td class="totals-value"><?php echo esc_html($currency . number_format($subtotal, 2)); ?></td>
                     </tr>
                     <tr>
-                        <td class="totals-label"><?php echo esc_html__('Shipping:', 'wc-order-entry'); ?></td>
+                        <td class="totals-label"><?php echo esc_html__('Shipping fee:', 'wc-order-entry'); ?></td>
                         <td class="totals-value"><?php echo esc_html($currency . number_format($shipping, 2)); ?></td>
                     </tr>
+                    <?php if ($tax_amount > 0.000001) : ?>
+                    <tr>
+                        <td class="totals-label"><?php echo esc_html__('Tax:', 'wc-order-entry'); ?></td>
+                        <td class="totals-value"><?php echo esc_html($currency . number_format($tax_amount, 2)); ?></td>
+                    </tr>
+                    <?php endif; ?>
                     <tr class="total-due">
                         <td class="totals-label"><?php echo esc_html__('Total Amount Due:', 'wc-order-entry'); ?></td>
                         <td class="totals-value"><?php echo esc_html($currency . number_format($total, 2)); ?></td>

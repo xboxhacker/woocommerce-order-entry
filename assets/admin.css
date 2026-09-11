@@ -98,6 +98,12 @@
     border-radius: 3px;
 }
 
+.wc-oe-weight-split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
 /* Product search container and spinner */
 .product-search-container {
     position: relative;

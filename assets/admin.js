@@ -50,6 +50,43 @@ jQuery(document).ready(function($) {
         return cleanName + (cleanEmail ? ' (' + cleanEmail + ')' : '');
     }
 
+    function getCombinedPackageWeight() {
+        const lbsRaw = $('#pkg-weight-lbs').val();
+        const ozRaw = $('#pkg-weight-oz').val();
+        const lbs = parseInt(lbsRaw, 10);
+        const oz = parseInt(ozRaw, 10);
+        const safeLbs = isNaN(lbs) || lbs < 0 ? 0 : lbs;
+        const safeOz = isNaN(oz) || oz < 0 ? 0 : oz;
+        return safeLbs + (safeOz / 16);
+    }
+
+    function setWeightFromPounds(totalPounds) {
+        const weight = parseFloat(totalPounds);
+        if (isNaN(weight) || weight <= 0) {
+            $('#pkg-weight-lbs').val('');
+            $('#pkg-weight-oz').val('');
+            return;
+        }
+        const totalOz = Math.round(weight * 16);
+        const lbs = Math.floor(totalOz / 16);
+        const oz = totalOz % 16;
+        $('#pkg-weight-lbs').val(lbs);
+        $('#pkg-weight-oz').val(oz);
+    }
+
+    $('#pkg-weight-oz').on('change blur', function() {
+        const raw = parseInt($(this).val(), 10);
+        if (isNaN(raw) || raw < 0) {
+            $(this).val('');
+            return;
+        }
+        if (raw > 15) {
+            $(this).val(15);
+            return;
+        }
+        $(this).val(raw);
+    });
+
     function setLiveRatesMessage(message, isError) {
         const $box = $('#live-rates-result');
         if (!$box.length) return;
@@ -105,7 +142,7 @@ jQuery(document).ready(function($) {
                 $('#customer-po').val(customer.po_number);
                 $('#order-retailer').val(customer.retailer_id || '');
                 $('#shipping-amount').val(customer.shipping_amount !== undefined && customer.shipping_amount !== null ? customer.shipping_amount : '0');
-                $('#pkg-weight').val(customer.package_weight || '');
+                setWeightFromPounds(customer.package_weight || 0);
                 $('#pkg-length').val(customer.package_length || '');
                 $('#pkg-width').val(customer.package_width || '');
                 $('#pkg-height').val(customer.package_height || '');
@@ -166,7 +203,7 @@ jQuery(document).ready(function($) {
         const state = $('#customer-state').val() || '';
         const postcode = ($('#customer-zip').val() || '').trim();
         const country = $('#customer-country').val() || 'US';
-        const weight = parseFloat($('#pkg-weight').val());
+        const weight = getCombinedPackageWeight();
         const length = parseFloat($('#pkg-length').val());
         const width = parseFloat($('#pkg-width').val());
         const height = parseFloat($('#pkg-height').val());
@@ -233,7 +270,7 @@ jQuery(document).ready(function($) {
         }
     });
 
-    $('#customer-city, #customer-state, #customer-zip, #customer-country, #pkg-weight, #pkg-length, #pkg-width, #pkg-height').on('change input', function() {
+    $('#customer-city, #customer-state, #customer-zip, #customer-country, #pkg-weight-lbs, #pkg-weight-oz, #pkg-length, #pkg-width, #pkg-height').on('change input', function() {
         selectedLiveRate = null;
     });
     
@@ -385,7 +422,7 @@ jQuery(document).ready(function($) {
             po_number: $('#customer-po').val(),
             retailer_id: $('#order-retailer').val() || 0,
             shipping_amount: $('#shipping-amount').val() || 0,
-            package_weight: $('#pkg-weight').val() || 0,
+            package_weight: getCombinedPackageWeight() || 0,
             package_length: $('#pkg-length').val() || 0,
             package_width: $('#pkg-width').val() || 0,
             package_height: $('#pkg-height').val() || 0,
@@ -538,11 +575,10 @@ jQuery(document).ready(function($) {
                 shipping_quote_carrier: selectedLiveRate ? (selectedLiveRate.carrier || '') : '',
                 shipping_quote_service: selectedLiveRate ? (selectedLiveRate.service || '') : '',
                 shipping_quote_amount: selectedLiveRate ? (selectedLiveRate.adjusted_amount || selectedLiveRate.amount || 0) : 0,
-                package_weight: $('#pkg-weight').val() || 0,
+                package_weight: getCombinedPackageWeight() || 0,
                 package_length: $('#pkg-length').val() || 0,
                 package_width: $('#pkg-width').val() || 0,
                 package_height: $('#pkg-height').val() || 0,
-                apply_tax: $('#apply-tax').is(':checked') ? 1 : 0,
                 nonce: wc_oe_ajax.nonce
             };
             
@@ -597,7 +633,7 @@ jQuery(document).ready(function($) {
         $('#saved-customers').val('');
         $('#saved-customer-result').hide().removeClass('success error').text('');
         $('#wc-oe-po-dup-msg').hide().text('');
-        $('#pkg-weight, #pkg-length, #pkg-width, #pkg-height').val('');
+        $('#pkg-weight-lbs, #pkg-weight-oz, #pkg-length, #pkg-width, #pkg-height').val('');
         clearLiveRatesSelection();
         setLiveRatesMessage('', false);
 
@@ -610,10 +646,9 @@ jQuery(document).ready(function($) {
         $('.search-spinner').removeClass('show');
         productLineCounter = 1;
         
-        // Reset shipping, retailer, and tax
+        // Reset shipping and retailer
         $('#shipping-amount').val('0');
         $('#order-retailer').val('');
-        $('#apply-tax').prop('checked', false);
     }
     
     // Add retailer
