@@ -2,7 +2,7 @@
 
 WordPress / WooCommerce plugin for manually creating drop-ship and retailer orders from a dedicated admin screen. Paste customer addresses, pick products, pull live shipping rates, create the order, then view/send invoices and packing slips from the order itself.
 
-**Current version:** 1.5.8
+**Current version:** 1.5.9
 
 ## Features
 
@@ -179,6 +179,9 @@ woocommerce-order-entry/
 - Invoice emails go to retailers only (not the drop-ship customer)
 
 ## Version history
+
+### 1.5.9
+- Every AJAX and admin action (orders, customers, retailers, invoices, packing slips) now requires the `manage_woocommerce` capability in addition to its nonce
 
 ### 1.5.8
 - Removed the `init` hook entirely so scanners no longer flag DB work on every page load

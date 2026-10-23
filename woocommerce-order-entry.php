@@ -3,7 +3,7 @@
  * Plugin Name: WooCommerce Order Entry
  * Plugin URI: https://github.com/xboxhacker/woocommerce-order-entry
  * Description: A plugin to manually create WooCommerce orders with customer information and product selection.
- * Version: 1.5.8
+ * Version: 1.5.9
  * Author: xboxhacker
  * License: GPL v2 or later
  * Text Domain: wc-order-entry
@@ -21,7 +21,7 @@ if (!defined('ABSPATH')) {
 // Define plugin constants
 define('WC_OE_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('WC_OE_PLUGIN_PATH', plugin_dir_path(__FILE__));
-define('WC_OE_VERSION', '1.5.8');
+define('WC_OE_VERSION', '1.5.9');
 define('WC_OE_DB_VERSION', '2');
 
 class WC_Order_Entry {
@@ -503,6 +503,9 @@ class WC_Order_Entry {
             wp_die(__('Invalid order.', 'wc-order-entry'));
         }
         check_admin_referer('wc_oe_send_invoice_' . $order_id);
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(__('You do not have permission to perform this action.', 'wc-order-entry'));
+        }
         
         $order = wc_get_order($order_id);
         if (!$order) {
@@ -691,6 +694,10 @@ class WC_Order_Entry {
     
     public function ajax_search_products() {
         check_ajax_referer('wc_oe_nonce', 'nonce');
+
+        if (!current_user_can('manage_woocommerce')) {
+            wp_send_json_error(__('Insufficient permissions.', 'wc-order-entry'));
+        }
         
         $search_term = sanitize_text_field($_POST['search_term']);
         $results = array();
@@ -837,6 +844,10 @@ class WC_Order_Entry {
     
     public function ajax_save_customer() {
         check_ajax_referer('wc_oe_nonce', 'nonce');
+
+        if (!current_user_can('manage_woocommerce')) {
+            wp_send_json_error(__('Insufficient permissions.', 'wc-order-entry'));
+        }
         
         global $wpdb;
         $table_name = $wpdb->prefix . 'wc_oe_customers';
@@ -898,6 +909,10 @@ class WC_Order_Entry {
     
     public function ajax_load_customer() {
         check_ajax_referer('wc_oe_nonce', 'nonce');
+
+        if (!current_user_can('manage_woocommerce')) {
+            wp_send_json_error(__('Insufficient permissions.', 'wc-order-entry'));
+        }
         
         global $wpdb;
         $table_name = $wpdb->prefix . 'wc_oe_customers';
@@ -914,6 +929,10 @@ class WC_Order_Entry {
 
     public function ajax_delete_customer() {
         check_ajax_referer('wc_oe_nonce', 'nonce');
+
+        if (!current_user_can('manage_woocommerce')) {
+            wp_send_json_error(__('Insufficient permissions.', 'wc-order-entry'));
+        }
 
         global $wpdb;
         $table_name = $wpdb->prefix . 'wc_oe_customers';
@@ -933,6 +952,10 @@ class WC_Order_Entry {
     
     public function ajax_parse_customer() {
         check_ajax_referer('wc_oe_nonce', 'nonce');
+
+        if (!current_user_can('manage_woocommerce')) {
+            wp_send_json_error(__('Insufficient permissions.', 'wc-order-entry'));
+        }
         
         $customer_text = isset($_POST['customer_text']) ? wp_unslash($_POST['customer_text']) : '';
         $parsed_data = $this->parse_customer_address_text($customer_text);
@@ -1491,6 +1514,10 @@ class WC_Order_Entry {
     
     public function ajax_save_retailer() {
         check_ajax_referer('wc_oe_nonce', 'nonce');
+
+        if (!current_user_can('manage_woocommerce')) {
+            wp_send_json_error(__('Insufficient permissions.', 'wc-order-entry'));
+        }
         
         global $wpdb;
         $table_name = $wpdb->prefix . 'wc_oe_retailers';
@@ -1516,6 +1543,10 @@ class WC_Order_Entry {
     
     public function ajax_delete_retailer() {
         check_ajax_referer('wc_oe_nonce', 'nonce');
+
+        if (!current_user_can('manage_woocommerce')) {
+            wp_send_json_error(__('Insufficient permissions.', 'wc-order-entry'));
+        }
         
         global $wpdb;
         $table_name = $wpdb->prefix . 'wc_oe_retailers';
@@ -1532,6 +1563,10 @@ class WC_Order_Entry {
     
     public function ajax_send_test_invoice() {
         check_ajax_referer('wc_oe_nonce', 'nonce');
+
+        if (!current_user_can('manage_woocommerce')) {
+            wp_send_json_error(__('Insufficient permissions.', 'wc-order-entry'));
+        }
         
         $email = sanitize_email($_POST['email']);
         if (empty($email)) {
@@ -1583,6 +1618,10 @@ class WC_Order_Entry {
     
     public function ajax_send_invoice() {
         check_ajax_referer('wc_oe_nonce', 'nonce');
+
+        if (!current_user_can('manage_woocommerce')) {
+            wp_send_json_error(__('Insufficient permissions.', 'wc-order-entry'));
+        }
         
         $order_id = intval($_POST['order_id']);
         $retailer_id = intval($_POST['retailer_id']);
@@ -1628,6 +1667,9 @@ class WC_Order_Entry {
             wp_die(__('Invalid order.', 'wc-order-entry'));
         }
         check_admin_referer('wc_oe_view_invoice_' . $order_id);
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(__('You do not have permission to perform this action.', 'wc-order-entry'));
+        }
         
         $bundle = $this->build_invoice_runtime_bundle($order_id);
         if (!$bundle) {
@@ -1652,6 +1694,9 @@ class WC_Order_Entry {
             wp_die(__('Invalid order.', 'wc-order-entry'));
         }
         check_admin_referer('wc_oe_download_invoice_' . $order_id);
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(__('You do not have permission to perform this action.', 'wc-order-entry'));
+        }
         
         $bundle = $this->build_invoice_runtime_bundle($order_id);
         if (!$bundle) {
@@ -1684,6 +1729,9 @@ class WC_Order_Entry {
             wp_die(__('Invalid order.', 'wc-order-entry'));
         }
         check_admin_referer('wc_oe_view_packing_slip_' . $order_id);
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(__('You do not have permission to perform this action.', 'wc-order-entry'));
+        }
 
         $order = wc_get_order($order_id);
         if (!$order) {
@@ -1743,6 +1791,9 @@ class WC_Order_Entry {
             wp_die(__('Invalid order.', 'wc-order-entry'));
         }
         check_admin_referer('wc_oe_download_packing_slip_' . $order_id);
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(__('You do not have permission to perform this action.', 'wc-order-entry'));
+        }
 
         $order = wc_get_order($order_id);
         if (!$order) {
@@ -2459,6 +2510,10 @@ class WC_Order_Entry {
      */
     public function ajax_check_po_duplicate() {
         check_ajax_referer('wc_oe_nonce', 'nonce');
+
+        if (!current_user_can('manage_woocommerce')) {
+            wp_send_json_error(__('Insufficient permissions.', 'wc-order-entry'));
+        }
         
         $po_raw = isset($_POST['po_number']) ? wp_unslash($_POST['po_number']) : '';
         $po = $this->normalize_po_number($po_raw);
@@ -2484,6 +2539,10 @@ class WC_Order_Entry {
     
     public function ajax_create_order() {
         check_ajax_referer('wc_oe_nonce', 'nonce');
+
+        if (!current_user_can('manage_woocommerce')) {
+            wp_send_json_error(__('Insufficient permissions.', 'wc-order-entry'));
+        }
         
         $retailer_id = isset($_POST['retailer_id']) ? intval($_POST['retailer_id']) : 0;
         $shipping_raw = isset($_POST['shipping_amount']) ? wp_unslash($_POST['shipping_amount']) : '';
